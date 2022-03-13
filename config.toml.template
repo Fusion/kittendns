@@ -1,0 +1,22 @@
+[settings]
+listen = 53
+
+[[rule]]
+condition = "remoteip != '192.168.1.19' and host startsWith 'google.'"
+action = "rewrite '142.250.189.14'"
+
+[[rule]]
+condition = "remoteip != '192.168.1.19'"
+action = "drop"
+
+[[rule]]
+condition = "not (remoteip startsWith '192.168.1')"
+action = "inspect"
+
+
+[[zone]]
+origin = "militate.com."
+TTL = 60
+    [[zone.record]]
+    host = "test"
+    ipv4 = "192.168.1.1"
