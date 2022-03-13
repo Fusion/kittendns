@@ -1,7 +1,8 @@
 package config
 
 type Settings struct {
-	Listen uint16
+	Listen     uint16
+	DebugLevel uint8
 }
 
 type Record struct {

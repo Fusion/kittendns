@@ -124,6 +124,10 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 }
 
 func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
+	if app.Config.Settings.DebugLevel > 2 {
+		log.Printf("Parsing rules for host [%s], remoteip [%s]\n", host, remoteip)
+	}
+
 	env := map[string]interface{}{
 		"host":     host,
 		"remoteip": remoteip,
