@@ -16,7 +16,7 @@ import (
 
 type App struct {
 	Config  *config.Config
-	Records *map[string]*config.Record
+	Records *map[string]config.Record
 }
 
 func main() {
@@ -48,20 +48,21 @@ func getConfig() *config.Config {
 	return &config
 }
 
-func flattenRecords(cfg *config.Config) *map[string]*config.Record {
-	records := map[string]*config.Record{}
+func flattenRecords(cfg *config.Config) *map[string]config.Record {
+	records := map[string]config.Record{}
 	for _, zone := range cfg.Zone {
 		for _, record := range zone.Record {
 			if record.TTL == 0 {
 				record.TTL = zone.TTL
 			}
 			if strings.HasSuffix(record.Host, ".") {
-				records[record.Host] = &record
+				records[record.Host] = record
 				continue
 			}
-			records[fmt.Sprintf("%s.%s", record.Host, zone.Origin)] = &record
+			records[fmt.Sprintf("%s.%s", record.Host, zone.Origin)] = record
 		}
 	}
+  spew.Dump(records)
 	return &records
 }
 
@@ -69,6 +70,7 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = false
+        m.Authoritative = true
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:

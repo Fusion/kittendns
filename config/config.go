@@ -25,6 +25,6 @@ type Rule struct {
 type Config struct {
 	Settings Settings
 	Zone     []Zone
-	Records  map[string]*Record
+	Records  map[string]Record
 	Rule     []Rule
 }
