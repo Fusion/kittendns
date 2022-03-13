@@ -101,6 +101,9 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			action := app.parseRules(remoteip, q.Name, answer)
 			if action == "" {
 				if answer != nil {
+                                    if app.Config.Settings.DebugLevel > 2 {
+                                        log.Println("Providing answer")
+                                    }
 					m.Answer = append(m.Answer, answer)
 				}
 				continue
@@ -145,6 +148,7 @@ func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
 		log.Println("Matched rule", rule.Condition, "->", rule.Action)
 		return rule.Action
 	}
+        log.Println("No rule applies")
 	return ""
 }
 
