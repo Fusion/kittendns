@@ -1,5 +1,6 @@
 [settings]
 listen = 53
+debuglevel = 1
 
 [[rule]]
 condition = "remoteip != '192.168.1.19' and host startsWith 'google.'"
@@ -17,6 +18,17 @@ action = "inspect"
 [[zone]]
 origin = "militate.com."
 TTL = 60
+
+    [zone.auth]
+    ns = "dns1.example.com"
+    email = "chris.example.com"
+    serial = 1
+
+    [[zone.record]]
+    host = "@"
+    ipv4 = "192.168.1.1"
+
     [[zone.record]]
     host = "test"
-    ipv4 = "192.168.1.1"
+    ipv4 = "192.168.1.2"
+    ipv4s = ["192.168.2.2", "192.168.3.2"]

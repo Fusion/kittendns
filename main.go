@@ -14,9 +14,13 @@ import (
 	"github.com/miekg/dns"
 )
 
+type ResolverEntry struct {
+	NextIPv4 uint8
+}
 type App struct {
-	Config  *config.Config
-	Records *map[string]config.Record
+	Config   *config.Config
+	Records  *map[string]config.Record
+	Resolver *map[string]ResolverEntry
 }
 
 func main() {
@@ -25,6 +29,7 @@ func main() {
 
 	app.Config = getConfig()
 	app.Records = flattenRecords(app.Config)
+	app.Resolver = &map[string]ResolverEntry{}
 
 	// attach request handler func
 	dns.HandleFunc(".", app.handleDnsRequest)
@@ -49,26 +54,27 @@ func getConfig() *config.Config {
 }
 
 func flattenRecords(cfg *config.Config) *map[string]config.Record {
-        var noAuth config.Auth
+	var noAuth config.Auth
 
 	records := map[string]config.Record{}
 	for _, zone := range cfg.Zone {
 		for _, record := range zone.Record {
-                        if zone.Auth != noAuth {
-                          record.Auth = config.Auth{
-                            Ns: zone.Auth.Ns,
-                            Email: zone.Auth.Email,
-                            Serial: zone.Auth.Serial,
-                          }
-                        }
-                        record.Origin = zone.Origin
+			if zone.Auth != noAuth {
+				record.Auth = config.Auth{
+					Ns:     zone.Auth.Ns,
+					Email:  zone.Auth.Email,
+					Serial: zone.Auth.Serial,
+				}
+			}
+			record.Origin = zone.Origin
 			if record.TTL == 0 {
 				record.TTL = zone.TTL
 			}
-                        if record.Host == "@" {
+			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s)
+			if record.Host == "@" {
 				records[zone.Origin] = record
 				continue
-                        }
+			}
 			if strings.HasSuffix(record.Host, ".") {
 				records[record.Host] = record
 				continue
@@ -76,15 +82,32 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 			records[fmt.Sprintf("%s.%s", record.Host, zone.Origin)] = record
 		}
 	}
-  spew.Dump(records)
+	if cfg.Settings.DebugLevel > 2 {
+		spew.Dump(records)
+	}
 	return &records
+}
+
+func flattenIPs(ip string, ips []string) []string {
+	var emptyIP string
+	mergedIps := []string{}
+	if ip != emptyIP {
+		mergedIps = append(mergedIps, ip)
+	}
+	if ips != nil {
+		mergedIps = append(mergedIps, ips...)
+	}
+	if len(mergedIps) == 0 {
+		log.Fatal("Found record with no IPs")
+	}
+	return mergedIps
 }
 
 func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Compress = false
-        m.Authoritative = true
+	m.Authoritative = true
 
 	switch r.Opcode {
 	case dns.OpcodeQuery:
@@ -95,31 +118,41 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 }
 
 func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
-        var noAuth config.Auth
+	var noAuth config.Auth
 
 	for _, q := range m.Question {
 		switch q.Qtype {
 		case dns.TypeSOA:
 			log.Printf("Zone SOA Query %s\n", q.Name)
-                        for _, zone := range app.Config.Zone {
-                          if zone.Origin == q.Name {
-                            soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
-                                  m.Ns = []dns.RR{soa}
-                          }
-                        }
+			for _, zone := range app.Config.Zone {
+				if zone.Origin == q.Name {
+					soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
+					m.Ns = []dns.RR{soa}
+				}
+			}
 		case dns.TypeA:
 			var answer dns.RR
-                        var soa, noSoa dns.RR
+			var soa, noSoa dns.RR
 			log.Printf("Query for %s\n", q.Name)
 			record, ok := (*app.Records)[q.Name]
 			if ok {
-				rr, err := newRR(q.Name, record.Host, record.IPv4, record.TTL)
+
+				resolver, ok := (*app.Resolver)[q.Name]
+				if !ok {
+					(*app.Resolver)[q.Name] = ResolverEntry{NextIPv4: 0}
+				}
+				resolver = (*app.Resolver)[q.Name]
+				nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)
+				resolver.NextIPv4 = nextIPv4
+				(*app.Resolver)[q.Name] = resolver
+
+				rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
 				if err == nil {
 					answer = rr
 				}
-                                if record.Auth != noAuth {
-                                  soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
-                                }
+				if record.Auth != noAuth {
+					soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
+				}
 			}
 
 			remoteip := ""
@@ -131,13 +164,13 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			action := app.parseRules(remoteip, q.Name, answer)
 			if action == "" {
 				if answer != nil {
-                                    if app.Config.Settings.DebugLevel > 2 {
-                                        log.Println("Providing answer")
-                                    }
+					if app.Config.Settings.DebugLevel > 2 {
+						log.Println("Providing answer")
+					}
 					m.Answer = append(m.Answer, answer)
-                                        if soa != noSoa {
-                                          m.Ns = []dns.RR{soa}
-                                        }
+					if soa != noSoa {
+						m.Ns = []dns.RR{soa}
+					}
 				}
 				continue
 			}
@@ -155,10 +188,19 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 				m.Answer = append(m.Answer, rr)
 				return
 			}
-                default:
-                      log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
+		default:
+			log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
 		}
 	}
+}
+
+func nextIPv4(idx uint8, ipv4s []string) (uint8, string) {
+	ipv4 := ipv4s[idx]
+	nextIdx := idx + 1
+	if nextIdx >= uint8(len(ipv4s)) {
+		nextIdx = 0
+	}
+	return nextIdx, ipv4
 }
 
 func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
@@ -183,7 +225,7 @@ func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
 		log.Println("Matched rule", rule.Condition, "->", rule.Action)
 		return rule.Action
 	}
-        log.Println("No rule applies")
+	log.Println("No rule applies")
 	return ""
 }
 
@@ -198,16 +240,16 @@ func newRR(query string, host string, ipv4 string, ttl uint32) (dns.RR, error) {
 }
 
 func newSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
-  soa := new(dns.SOA)
-  	soa.Hdr = dns.RR_Header{origin, dns.TypeSOA, dns.ClassINET, 14400, 0}
+	soa := new(dns.SOA)
+	soa.Hdr = dns.RR_Header{origin, dns.TypeSOA, dns.ClassINET, 14400, 0}
 	soa.Ns = fmt.Sprintf("%s.", ns)
 	soa.Mbox = fmt.Sprintf("%s.", mbox)
 	soa.Serial = serial
 	soa.Refresh = 86400
 	soa.Retry = 7200
-	soa.Expire = (86400 + 7200 * 2)
+	soa.Expire = (86400 + 7200*2)
 	soa.Minttl = 7200
-  return soa
+	return soa
 }
 
 func unquote(str string) string {

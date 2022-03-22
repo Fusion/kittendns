@@ -6,23 +6,24 @@ type Settings struct {
 }
 
 type Auth struct {
-        Ns      string
-        Email   string
-        Serial  uint32
+	Ns     string
+	Email  string
+	Serial uint32
 }
 
 type Record struct {
-	Host string
-	IPv4 string
-        Origin string
-	TTL  uint32
-        Auth Auth
+	Host   string
+	IPv4   string
+	IPv4s  []string
+	Origin string
+	TTL    uint32
+	Auth   Auth
 }
 
 type Zone struct {
 	Origin string
 	TTL    uint32
-        Auth Auth
+	Auth   Auth
 	Record []Record
 }
 
