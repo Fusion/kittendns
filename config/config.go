@@ -5,15 +5,24 @@ type Settings struct {
 	DebugLevel uint8
 }
 
+type Auth struct {
+        Ns      string
+        Email   string
+        Serial  uint32
+}
+
 type Record struct {
 	Host string
 	IPv4 string
+        Origin string
 	TTL  uint32
+        Auth Auth
 }
 
 type Zone struct {
 	Origin string
 	TTL    uint32
+        Auth Auth
 	Record []Record
 }
 

@@ -49,12 +49,26 @@ func getConfig() *config.Config {
 }
 
 func flattenRecords(cfg *config.Config) *map[string]config.Record {
+        var noAuth config.Auth
+
 	records := map[string]config.Record{}
 	for _, zone := range cfg.Zone {
 		for _, record := range zone.Record {
+                        if zone.Auth != noAuth {
+                          record.Auth = config.Auth{
+                            Ns: zone.Auth.Ns,
+                            Email: zone.Auth.Email,
+                            Serial: zone.Auth.Serial,
+                          }
+                        }
+                        record.Origin = zone.Origin
 			if record.TTL == 0 {
 				record.TTL = zone.TTL
 			}
+                        if record.Host == "@" {
+				records[zone.Origin] = record
+				continue
+                        }
 			if strings.HasSuffix(record.Host, ".") {
 				records[record.Host] = record
 				continue
@@ -81,10 +95,21 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 }
 
 func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
+        var noAuth config.Auth
+
 	for _, q := range m.Question {
 		switch q.Qtype {
+		case dns.TypeSOA:
+			log.Printf("Zone SOA Query %s\n", q.Name)
+                        for _, zone := range app.Config.Zone {
+                          if zone.Origin == q.Name {
+                            soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
+                                  m.Ns = []dns.RR{soa}
+                          }
+                        }
 		case dns.TypeA:
 			var answer dns.RR
+                        var soa, noSoa dns.RR
 			log.Printf("Query for %s\n", q.Name)
 			record, ok := (*app.Records)[q.Name]
 			if ok {
@@ -92,6 +117,9 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 				if err == nil {
 					answer = rr
 				}
+                                if record.Auth != noAuth {
+                                  soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
+                                }
 			}
 
 			remoteip := ""
@@ -107,6 +135,9 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
                                         log.Println("Providing answer")
                                     }
 					m.Answer = append(m.Answer, answer)
+                                        if soa != noSoa {
+                                          m.Ns = []dns.RR{soa}
+                                        }
 				}
 				continue
 			}
@@ -124,6 +155,8 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 				m.Answer = append(m.Answer, rr)
 				return
 			}
+                default:
+                      log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
 		}
 	}
 }
@@ -162,6 +195,19 @@ func newRR(query string, host string, ipv4 string, ttl uint32) (dns.RR, error) {
 			ttl,
 			ipv4))
 	return rr, err
+}
+
+func newSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
+  soa := new(dns.SOA)
+  	soa.Hdr = dns.RR_Header{origin, dns.TypeSOA, dns.ClassINET, 14400, 0}
+	soa.Ns = fmt.Sprintf("%s.", ns)
+	soa.Mbox = fmt.Sprintf("%s.", mbox)
+	soa.Serial = serial
+	soa.Refresh = 86400
+	soa.Retry = 7200
+	soa.Expire = (86400 + 7200 * 2)
+	soa.Minttl = 7200
+  return soa
 }
 
 func unquote(str string) string {
