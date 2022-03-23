@@ -12,9 +12,20 @@ type Auth struct {
 }
 
 type Record struct {
-	Host   string
-	IPv4   string
-	IPv4s  []string
+	Type uint16
+
+	Host string
+
+	IPv4  string
+	IPv4s []string
+
+	Service  string
+	Proto    string
+	Priority uint16
+	Weight   uint16
+	Port     uint16
+	Target   string
+
 	Origin string
 	TTL    uint32
 	Auth   Auth

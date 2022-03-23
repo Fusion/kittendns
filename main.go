@@ -70,22 +70,53 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 			if record.TTL == 0 {
 				record.TTL = zone.TTL
 			}
+
+			// SRV Record
+			if record.Service != "" {
+				if record.Host != "" {
+					log.Println("Ignored:: Host and Service cannot be set at the same time.")
+					continue
+				}
+				if record.Target == "" {
+					log.Println("Ignored:: No Target specified for a Service.")
+					continue
+				}
+				record.Target = canonicalize(record.Origin, record.Target)
+				if record.Proto == "" {
+					record.Proto = "tcp"
+				}
+				if record.Priority == 0 {
+					record.Priority = 10
+				}
+				if record.Weight == 0 {
+					record.Weight = 10
+				}
+				record.Type = dns.TypeSRV
+				records[fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin)] = record
+				continue
+			}
+
+			// A Record
 			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s)
+			record.Type = dns.TypeA
 			if record.Host == "@" {
 				records[zone.Origin] = record
 				continue
 			}
-			if strings.HasSuffix(record.Host, ".") {
-				records[record.Host] = record
-				continue
-			}
-			records[fmt.Sprintf("%s.%s", record.Host, zone.Origin)] = record
+			records[canonicalize(zone.Origin, record.Host)] = record
 		}
 	}
 	if cfg.Settings.DebugLevel > 2 {
 		spew.Dump(records)
 	}
 	return &records
+}
+
+func canonicalize(origin string, host string) string {
+	if strings.HasSuffix(host, ".") {
+		return host
+	}
+	return fmt.Sprintf("%s.%s", host, origin)
 }
 
 func flattenIPs(ip string, ips []string) []string {
@@ -121,6 +152,12 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 	var noAuth config.Auth
 
 	for _, q := range m.Question {
+
+		var answer dns.RR
+		var soa, noSoa dns.RR
+		var record config.Record
+		var ok bool
+
 		switch q.Qtype {
 		case dns.TypeSOA:
 			log.Printf("Zone SOA Query %s\n", q.Name)
@@ -130,13 +167,17 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 					m.Ns = []dns.RR{soa}
 				}
 			}
-		case dns.TypeA:
-			var answer dns.RR
-			var soa, noSoa dns.RR
-			log.Printf("Query for %s\n", q.Name)
+		case dns.TypeSRV:
+			log.Printf("Zone SRV Query %s\n", q.Name)
 			record, ok := (*app.Records)[q.Name]
-			if ok {
-
+			if ok && record.Type == dns.TypeSRV {
+				srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
+				answer = srv
+			}
+		case dns.TypeA:
+			log.Printf("Query for %s\n", q.Name)
+			record, ok = (*app.Records)[q.Name]
+			if ok && record.Type == dns.TypeA {
 				resolver, ok := (*app.Resolver)[q.Name]
 				if !ok {
 					(*app.Resolver)[q.Name] = ResolverEntry{NextIPv4: 0}
@@ -150,47 +191,51 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 				if err == nil {
 					answer = rr
 				}
-				if record.Auth != noAuth {
-					soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
-				}
 			}
 
-			remoteip := ""
-			remoteAddr := ctx.Value("remoteaddr")
-			if remoteAddr != nil {
-				remoteip = strings.Split(remoteAddr.(string), ":")[0]
-			}
-
-			action := app.parseRules(remoteip, q.Name, answer)
-			if action == "" {
-				if answer != nil {
-					if app.Config.Settings.DebugLevel > 2 {
-						log.Println("Providing answer")
-					}
-					m.Answer = append(m.Answer, answer)
-					if soa != noSoa {
-						m.Ns = []dns.RR{soa}
-					}
-				}
-				continue
-			}
-			if action == "drop" {
-				// Do nothing ... no response
-				continue
-			}
-			if action == "inspect" {
-				spew.Dump(record)
-				continue
-			}
-			if strings.HasPrefix(action, "rewrite ") {
-				shadowIP := unquote(strings.TrimPrefix(action, "rewrite "))
-				rr, _ := newRR(q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL
-				m.Answer = append(m.Answer, rr)
-				return
-			}
 		default:
 			log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
 		}
+
+		if record.Auth != noAuth {
+			soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
+		}
+
+		// To the rules engine
+		remoteip := ""
+		remoteAddr := ctx.Value("remoteaddr")
+		if remoteAddr != nil {
+			remoteip = strings.Split(remoteAddr.(string), ":")[0]
+		}
+
+		action := app.parseRules(remoteip, q.Name, answer)
+		if action == "" {
+			if answer != nil {
+				if app.Config.Settings.DebugLevel > 2 {
+					log.Println("Providing answer", answer)
+				}
+				m.Answer = append(m.Answer, answer)
+				if soa != noSoa {
+					m.Ns = []dns.RR{soa}
+				}
+			}
+			continue
+		}
+		if action == "drop" {
+			// Do nothing ... no response
+			continue
+		}
+		if action == "inspect" {
+			spew.Dump(record)
+			continue
+		}
+		if strings.HasPrefix(action, "rewrite ") {
+			shadowIP := unquote(strings.TrimPrefix(action, "rewrite "))
+			rr, _ := newRR(q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL
+			m.Answer = append(m.Answer, rr)
+			return
+		}
+
 	}
 }
 
@@ -239,9 +284,29 @@ func newRR(query string, host string, ipv4 string, ttl uint32) (dns.RR, error) {
 	return rr, err
 }
 
+func newSRV(query string, target string, port uint16, priority uint16, weight uint16, ttl uint32) dns.RR {
+	srv := new(dns.SRV)
+	srv.Hdr = dns.RR_Header{
+		Name:     query,
+		Rrtype:   dns.TypeSRV,
+		Class:    dns.ClassINET,
+		Ttl:      ttl,
+		Rdlength: 0}
+	srv.Port = port
+	srv.Priority = priority
+	srv.Weight = weight
+	srv.Target = target
+	return srv
+}
+
 func newSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
 	soa := new(dns.SOA)
-	soa.Hdr = dns.RR_Header{origin, dns.TypeSOA, dns.ClassINET, 14400, 0}
+	soa.Hdr = dns.RR_Header{
+		Name:     origin,
+		Rrtype:   dns.TypeSOA,
+		Class:    dns.ClassINET,
+		Ttl:      14400,
+		Rdlength: 0}
 	soa.Ns = fmt.Sprintf("%s.", ns)
 	soa.Mbox = fmt.Sprintf("%s.", mbox)
 	soa.Serial = serial
