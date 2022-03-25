@@ -1,8 +1,22 @@
 package config
 
+type Parent struct {
+	// May be suffixed with [:port]
+	Address string
+}
 type Settings struct {
 	Listen     uint16
 	DebugLevel uint8
+	// If true, when multiple records are found for a domain, only one is returned
+	// A different one every time.
+	// If false, all records are returned.
+	LoadBalance bool
+	// In lazy mode, when a CNAME is found, the CNAME is returned and the
+	// target is not resolved.
+	Lazy bool
+
+	// DNS to recurse to when an authoritative answer does not exist.
+	Parent Parent
 }
 
 type Auth struct {
@@ -16,9 +30,14 @@ type Record struct {
 
 	Host string
 
+	// A
 	IPv4  string
 	IPv4s []string
 
+	// CNAME
+	Aliased string
+
+	// SRV
 	Service  string
 	Proto    string
 	Priority uint16

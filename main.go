@@ -50,6 +50,10 @@ func getConfig() *config.Config {
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		log.Fatal(err)
 	}
+	// Default parent dns to port 53 is not set
+	if !strings.Contains(config.Settings.Parent.Address, ":") {
+		config.Settings.Parent.Address = fmt.Sprintf("%s:%d", config.Settings.Parent.Address, 53)
+	}
 	return &config
 }
 
@@ -96,8 +100,25 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 				continue
 			}
 
+			// CNAME Record
+			if record.Aliased != "" {
+				ipv4 := flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
+				if len(ipv4) > 0 {
+					log.Println("Ignored:: Aliased and IPv4 cannot be set at the same time.")
+					continue
+				}
+				if record.Host == "@" {
+					log.Println("Ignored:: Origin record cannot be aliased.")
+					continue
+				}
+				record.Aliased = canonicalize(record.Origin, record.Aliased)
+				record.Type = dns.TypeCNAME
+				records[canonicalize(zone.Origin, record.Host)] = record
+				continue
+			}
+
 			// A Record
-			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s)
+			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s, Mandatory)
 			record.Type = dns.TypeA
 			if record.Host == "@" {
 				records[zone.Origin] = record
@@ -119,7 +140,14 @@ func canonicalize(origin string, host string) string {
 	return fmt.Sprintf("%s.%s", host, origin)
 }
 
-func flattenIPs(ip string, ips []string) []string {
+type MandatoryValue int
+
+const (
+	Mandatory MandatoryValue = iota
+	NotMandatory
+)
+
+func flattenIPs(ip string, ips []string, mandatory MandatoryValue) []string {
 	var emptyIP string
 	mergedIps := []string{}
 	if ip != emptyIP {
@@ -128,8 +156,10 @@ func flattenIPs(ip string, ips []string) []string {
 	if ips != nil {
 		mergedIps = append(mergedIps, ips...)
 	}
-	if len(mergedIps) == 0 {
-		log.Fatal("Found record with no IPs")
+	if mandatory == Mandatory {
+		if len(mergedIps) == 0 {
+			log.Fatal("Found record with no IPs")
+		}
 	}
 	return mergedIps
 }
@@ -149,75 +179,121 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 }
 
 func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
+	for _, q := range m.Question {
+		// This variable will be set to true if this is something
+		// we can resolve locally.
+		authoritative := false
+		for _, zone := range app.Config.Zone {
+			if strings.HasSuffix(q.Name, zone.Origin) {
+				authoritative = true
+				break
+			}
+		}
+		if authoritative {
+			app.authoritativeSearch(ctx, m, q)
+			continue
+		}
+
+		// TODO Check if RecursionRequested
+		app.recursiveSearch(ctx, m, q)
+	}
+}
+
+func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
 	var noAuth config.Auth
 
-	for _, q := range m.Question {
+	var answers []dns.RR
+	var soa, noSoa dns.RR
+	var record config.Record
+	var ok bool
 
-		var answer dns.RR
-		var soa, noSoa dns.RR
-		var record config.Record
-		var ok bool
+	switch q.Qtype {
 
-		switch q.Qtype {
-		case dns.TypeSOA:
-			log.Printf("Zone SOA Query %s\n", q.Name)
-			for _, zone := range app.Config.Zone {
-				if zone.Origin == q.Name {
-					soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
-					m.Ns = []dns.RR{soa}
-				}
+	case dns.TypeSOA:
+		log.Printf("Zone SOA Query %s\n", q.Name)
+		for _, zone := range app.Config.Zone {
+			if zone.Origin == q.Name {
+				soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
+				m.Ns = []dns.RR{soa}
 			}
-		case dns.TypeSRV:
-			log.Printf("Zone SRV Query %s\n", q.Name)
-			record, ok := (*app.Records)[q.Name]
-			if ok && record.Type == dns.TypeSRV {
-				srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
-				answer = srv
-			}
-		case dns.TypeA:
-			log.Printf("Query for %s\n", q.Name)
-			record, ok = (*app.Records)[q.Name]
-			if ok && record.Type == dns.TypeA {
+		}
+
+	case dns.TypeSRV:
+		log.Printf("SRV Query %s\n", q.Name)
+		record, ok := (*app.Records)[q.Name]
+		if ok && record.Type == dns.TypeSRV {
+			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
+			answers = []dns.RR{srv}
+		}
+
+	case dns.TypeA, dns.TypeCNAME:
+		record, ok = (*app.Records)[q.Name]
+		if ok {
+			if record.Type == dns.TypeCNAME {
+				log.Printf("CNAME Query for %s\n", q.Name)
+				alias := newCNAME(q.Name, record.Aliased, record.TTL)
+				answers = []dns.RR{alias}
+			} else if record.Type == dns.TypeA && q.Qtype != dns.TypeCNAME {
+				log.Printf("Query for %s\n", q.Name)
 				resolver, ok := (*app.Resolver)[q.Name]
 				if !ok {
 					(*app.Resolver)[q.Name] = ResolverEntry{NextIPv4: 0}
 				}
-				resolver = (*app.Resolver)[q.Name]
-				nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)
-				resolver.NextIPv4 = nextIPv4
-				(*app.Resolver)[q.Name] = resolver
 
-				rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
-				if err == nil {
-					answer = rr
+				if app.Config.Settings.LoadBalance {
+					resolver = (*app.Resolver)[q.Name]
+					nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)
+					resolver.NextIPv4 = nextIPv4
+					(*app.Resolver)[q.Name] = resolver
+
+					rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
+					if err == nil {
+						answers = []dns.RR{rr}
+					}
+				} else {
+					for _, ipv4 := range record.IPv4s {
+						rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
+						if err == nil {
+							answers = append(answers, rr)
+						}
+					}
+				}
+			}
+		}
+
+	default:
+		log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
+	}
+
+	if record.Auth != noAuth {
+		soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
+	}
+
+	// To the rules engine
+	remoteip := ""
+	remoteAddr := ctx.Value("remoteaddr")
+	if remoteAddr != nil {
+		remoteip = strings.Split(remoteAddr.(string), ":")[0]
+	}
+
+	for _, answer := range answers {
+		action := app.parseRules(remoteip, q.Name, answer)
+		if action == "" {
+			if app.Config.Settings.DebugLevel > 2 {
+				log.Println("Providing answer", answer)
+			}
+			m.Answer = append(m.Answer, answer)
+
+			if !app.Config.Settings.Lazy {
+				// If this is a CNAME, keep digging until we find an A record
+				if answer.Header().Rrtype == dns.TypeCNAME {
+					q.Name = answer.(*dns.CNAME).Target
+					app.authoritativeSearch(ctx, m, q)
 				}
 			}
 
-		default:
-			log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
-		}
-
-		if record.Auth != noAuth {
-			soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
-		}
-
-		// To the rules engine
-		remoteip := ""
-		remoteAddr := ctx.Value("remoteaddr")
-		if remoteAddr != nil {
-			remoteip = strings.Split(remoteAddr.(string), ":")[0]
-		}
-
-		action := app.parseRules(remoteip, q.Name, answer)
-		if action == "" {
-			if answer != nil {
-				if app.Config.Settings.DebugLevel > 2 {
-					log.Println("Providing answer", answer)
-				}
-				m.Answer = append(m.Answer, answer)
-				if soa != noSoa {
-					m.Ns = []dns.RR{soa}
-				}
+			if soa != noSoa {
+				m.Ns = []dns.RR{soa}
 			}
 			continue
 		}
@@ -233,10 +309,25 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			shadowIP := unquote(strings.TrimPrefix(action, "rewrite "))
 			rr, _ := newRR(q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL
 			m.Answer = append(m.Answer, rr)
-			return
+			continue
 		}
-
 	}
+}
+
+func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
+	recM := new(dns.Msg)
+	recM.Id = dns.Id()
+	recM.RecursionDesired = true
+	recM.Question = []dns.Question{q}
+	client := new(dns.Client)
+	log.Println("Recursing to", app.Config.Settings.Parent.Address)
+	response, _, err := client.Exchange(recM, app.Config.Settings.Parent.Address)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	m.Answer = response.Answer
+	// Do not copy Ns as we cannot be authoritative
 }
 
 func nextIPv4(idx uint8, ipv4s []string) (uint8, string) {
@@ -282,6 +373,17 @@ func newRR(query string, host string, ipv4 string, ttl uint32) (dns.RR, error) {
 			ttl,
 			ipv4))
 	return rr, err
+}
+
+func newCNAME(query string, target string, ttl uint32) dns.RR {
+	alias := new(dns.CNAME)
+	alias.Hdr = dns.RR_Header{
+		Name:   query,
+		Rrtype: dns.TypeCNAME,
+		Class:  dns.ClassINET,
+		Ttl:    ttl}
+	alias.Target = target
+	return alias
 }
 
 func newSRV(query string, target string, port uint16, priority uint16, weight uint16, ttl uint32) dns.RR {
