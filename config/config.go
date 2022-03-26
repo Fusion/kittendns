@@ -14,6 +14,10 @@ type Settings struct {
 	// In lazy mode, when a CNAME is found, the CNAME is returned and the
 	// target is not resolved.
 	Lazy bool
+	// A caching DNS will not refresh its knowledge until Ttl value expires
+	Cache bool
+	// If true, CNAME chains will be merged into a single record
+	Flatten bool
 
 	// DNS to recurse to when an authoritative answer does not exist.
 	Parent Parent

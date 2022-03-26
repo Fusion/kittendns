@@ -9,6 +9,7 @@ import (
 
 	"github.com/antonmedv/expr"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/fusion/kittendns/cache"
 	"github.com/fusion/kittendns/config"
 	"github.com/hydronica/toml"
 	"github.com/miekg/dns"
@@ -21,6 +22,7 @@ type App struct {
 	Config   *config.Config
 	Records  *map[string]config.Record
 	Resolver *map[string]ResolverEntry
+	Cache    *cache.RcCache
 }
 
 func main() {
@@ -30,6 +32,7 @@ func main() {
 	app.Config = getConfig()
 	app.Records = flattenRecords(app.Config)
 	app.Resolver = &map[string]ResolverEntry{}
+	app.Cache = &cache.RcCache{}
 
 	// attach request handler func
 	dns.HandleFunc(".", app.handleDnsRequest)
@@ -315,18 +318,38 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 }
 
 func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
-	recM := new(dns.Msg)
-	recM.Id = dns.Id()
-	recM.RecursionDesired = true
-	recM.Question = []dns.Question{q}
-	client := new(dns.Client)
-	log.Println("Recursing to", app.Config.Settings.Parent.Address)
-	response, _, err := client.Exchange(recM, app.Config.Settings.Parent.Address)
-	if err != nil {
-		log.Println(err)
-		return
+	answers, ok, remaining := app.Cache.Get(q.Name)
+	if ok {
+		if app.Config.Settings.DebugLevel > 2 {
+			log.Println("Cache hit for", q.Name, "remaining", remaining, "seconds")
+		}
+		m.Answer = answers
+	} else {
+		recM := new(dns.Msg)
+		recM.Id = dns.Id()
+		recM.RecursionDesired = true
+		recM.Question = []dns.Question{q}
+		client := new(dns.Client)
+		log.Println("Recursing to", app.Config.Settings.Parent.Address)
+		response, _, err := client.Exchange(recM, app.Config.Settings.Parent.Address)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		if len(response.Answer) < 1 {
+			log.Println("No answer")
+			return
+		}
+		app.Cache.Set(
+			cache.Flatten,
+			q.Name,
+			q.Qtype,
+			response.Answer,
+			uint32(response.Answer[0].Header().Ttl))
+		m.Answer = response.Answer
+
 	}
-	m.Answer = response.Answer
 	// Do not copy Ns as we cannot be authoritative
 }
 
