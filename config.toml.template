@@ -1,6 +1,19 @@
 [settings]
 listen = 53
 debuglevel = 1
+# Cache recursive queries.
+cache = true
+# Flatten CNAME chains down to A records. Not fully functional yet.
+flatten = false
+# Will return a single record, round-robin, when multiple records are available.
+loadbalance = true
+
+    # A parent DNS to recurse non authoritative queries to
+    [settings.parent]
+    address = "192.168.1.254"
+
+# A few rules. Use a natural language engine similar to the one I included
+# in https://github.com/fusion/mailbiter
 
 [[rule]]
 condition = "remoteip != '192.168.1.19' and host startsWith 'google.'"
@@ -14,21 +27,39 @@ action = "drop"
 condition = "not (remoteip startsWith '192.168.1')"
 action = "inspect"
 
+# Zone definitions
 
 [[zone]]
 origin = "militate.com."
 TTL = 60
 
+    # SOA information
     [zone.auth]
     ns = "dns1.example.com"
     email = "chris.example.com"
     serial = 1
 
+    # Top-level record
     [[zone.record]]
     host = "@"
     ipv4 = "192.168.1.1"
 
+    # An A record, with multiple replies
+    # (can be load balanced, either in server or in client)
     [[zone.record]]
     host = "test"
     ipv4 = "192.168.1.2"
     ipv4s = ["192.168.2.2", "192.168.3.2"]
+
+    # An SRV record
+    [[zone.record]]
+    Service = "sip"
+    Proto = "tcp"
+    Priority = 10
+    Weight = 5
+    Target = "test"
+
+    # A CNAME record
+    [[zone.record]]
+    host = "bogus2"
+    aliased = "test"
