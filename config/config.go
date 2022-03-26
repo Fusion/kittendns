@@ -18,6 +18,8 @@ type Settings struct {
 	Cache bool
 	// If true, CNAME chains will be merged into a single record
 	Flatten bool
+	// Disabling the rule engine speeds up simple DNS lookups
+	DisableRuleEngine bool
 
 	// DNS to recurse to when an authoritative answer does not exist.
 	Parent Parent

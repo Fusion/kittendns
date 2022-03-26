@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/antonmedv/expr"
 	"github.com/davecgh/go-spew/spew"
@@ -18,10 +19,14 @@ import (
 type ResolverEntry struct {
 	NextIPv4 uint8
 }
+type Resolver struct {
+	sync.RWMutex
+	entries *map[string]ResolverEntry
+}
 type App struct {
 	Config   *config.Config
 	Records  *map[string]config.Record
-	Resolver *map[string]ResolverEntry
+	Resolver *Resolver
 	Cache    *cache.RcCache
 }
 
@@ -31,7 +36,7 @@ func main() {
 
 	app.Config = getConfig()
 	app.Records = flattenRecords(app.Config)
-	app.Resolver = &map[string]ResolverEntry{}
+	app.Resolver = &Resolver{entries: &map[string]ResolverEntry{}}
 	app.Cache = &cache.RcCache{}
 
 	// attach request handler func
@@ -195,10 +200,11 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 		if authoritative {
 			app.authoritativeSearch(ctx, m, q)
 			continue
+		} else {
+			// TODO Check if RecursionRequested
+			app.recursiveSearch(ctx, m, q)
 		}
 
-		// TODO Check if RecursionRequested
-		app.recursiveSearch(ctx, m, q)
 	}
 }
 
@@ -213,7 +219,9 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 	switch q.Qtype {
 
 	case dns.TypeSOA:
-		log.Printf("Zone SOA Query %s\n", q.Name)
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("Zone SOA Query %s\n", q.Name)
+		}
 		for _, zone := range app.Config.Zone {
 			if zone.Origin == q.Name {
 				soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
@@ -222,7 +230,9 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 
 	case dns.TypeSRV:
-		log.Printf("SRV Query %s\n", q.Name)
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("SRV Query %s\n", q.Name)
+		}
 		record, ok := (*app.Records)[q.Name]
 		if ok && record.Type == dns.TypeSRV {
 			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
@@ -233,21 +243,31 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		record, ok = (*app.Records)[q.Name]
 		if ok {
 			if record.Type == dns.TypeCNAME {
-				log.Printf("CNAME Query for %s\n", q.Name)
+				if app.Config.Settings.DebugLevel > 0 {
+					log.Printf("CNAME Query for %s\n", q.Name)
+				}
 				alias := newCNAME(q.Name, record.Aliased, record.TTL)
 				answers = []dns.RR{alias}
 			} else if record.Type == dns.TypeA && q.Qtype != dns.TypeCNAME {
-				log.Printf("Query for %s\n", q.Name)
-				resolver, ok := (*app.Resolver)[q.Name]
+				if app.Config.Settings.DebugLevel > 0 {
+					log.Printf("Query for %s\n", q.Name)
+				}
+				app.Resolver.RWMutex.RLock()
+				resolver, ok := (*app.Resolver.entries)[q.Name]
+				app.Resolver.RWMutex.RUnlock()
 				if !ok {
-					(*app.Resolver)[q.Name] = ResolverEntry{NextIPv4: 0}
+					app.Resolver.RWMutex.Lock()
+					(*app.Resolver.entries)[q.Name] = ResolverEntry{NextIPv4: 0}
+					app.Resolver.RWMutex.Unlock()
 				}
 
 				if app.Config.Settings.LoadBalance {
-					resolver = (*app.Resolver)[q.Name]
+					app.Resolver.RWMutex.Lock()
+					resolver = (*app.Resolver.entries)[q.Name]
 					nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)
 					resolver.NextIPv4 = nextIPv4
-					(*app.Resolver)[q.Name] = resolver
+					(*app.Resolver.entries)[q.Name] = resolver
+					app.Resolver.RWMutex.Unlock()
 
 					rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
 					if err == nil {
@@ -265,14 +285,41 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 
 	default:
-		log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
+		}
 	}
 
 	if record.Auth != noAuth {
 		soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
 	}
 
-	// To the rules engine
+	// To the rule engine
+	if app.Config.Settings.DisableRuleEngine {
+		if app.Config.Settings.DebugLevel > 2 {
+			log.Println("Skipping the rule engine")
+		}
+		for _, answer := range answers {
+			if app.Config.Settings.DebugLevel > 2 {
+				log.Println("Providing answer", answer)
+			}
+			m.Answer = append(m.Answer, answer)
+
+			if !app.Config.Settings.Lazy {
+				// If this is a CNAME, keep digging until we find an A record
+				if answer.Header().Rrtype == dns.TypeCNAME {
+					q.Name = answer.(*dns.CNAME).Target
+					app.authoritativeSearch(ctx, m, q)
+				}
+			}
+
+			if soa != noSoa {
+				m.Ns = []dns.RR{soa}
+			}
+		}
+		return
+	}
+
 	remoteip := ""
 	remoteAddr := ctx.Value("remoteaddr")
 	if remoteAddr != nil {
@@ -330,7 +377,9 @@ func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question)
 		recM.RecursionDesired = true
 		recM.Question = []dns.Question{q}
 		client := new(dns.Client)
-		log.Println("Recursing to", app.Config.Settings.Parent.Address)
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Println("Recursing to", app.Config.Settings.Parent.Address)
+		}
 		response, _, err := client.Exchange(recM, app.Config.Settings.Parent.Address)
 		if err != nil {
 			log.Println(err)
@@ -348,9 +397,10 @@ func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question)
 			response.Answer,
 			uint32(response.Answer[0].Header().Ttl))
 		m.Answer = response.Answer
-
 	}
 	// Do not copy Ns as we cannot be authoritative
+
+	// TODO Implement rule engine knowing that all answers are within a single message
 }
 
 func nextIPv4(idx uint8, ipv4s []string) (uint8, string) {
@@ -381,10 +431,14 @@ func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
 			continue
 		}
 		// Matched
-		log.Println("Matched rule", rule.Condition, "->", rule.Action)
+		if app.Config.Settings.DebugLevel > 2 {
+			log.Println("Matched rule", rule.Condition, "->", rule.Action)
+		}
 		return rule.Action
 	}
-	log.Println("No rule applies")
+	if app.Config.Settings.DebugLevel > 2 {
+		log.Println("No rule applies")
+	}
 	return ""
 }
 
