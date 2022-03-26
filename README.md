@@ -1,3 +1,4 @@
+![](assets/kittendns.png)
 # What is this?
 
 A toy DNS for hobbyists and worried people.
