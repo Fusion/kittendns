@@ -62,7 +62,7 @@ https://github.com/infobloxopen/dnstools/tree/master/mig
 Results:
 
 |Rule Engine|Queries/Minute|Queries/Second|
-|-|-|
+|-|-|-|
 |Enabled|6.7M|111,677|
 |Disabled|6.79M|113,181|
 
