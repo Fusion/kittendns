@@ -252,16 +252,16 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				if app.Config.Settings.DebugLevel > 0 {
 					log.Printf("Query for %s\n", q.Name)
 				}
-				app.Resolver.RWMutex.RLock()
-				resolver, ok := (*app.Resolver.entries)[q.Name]
-				app.Resolver.RWMutex.RUnlock()
-				if !ok {
-					app.Resolver.RWMutex.Lock()
-					(*app.Resolver.entries)[q.Name] = ResolverEntry{NextIPv4: 0}
-					app.Resolver.RWMutex.Unlock()
-				}
-
 				if app.Config.Settings.LoadBalance {
+					app.Resolver.RWMutex.RLock()
+					resolver, ok := (*app.Resolver.entries)[q.Name]
+					app.Resolver.RWMutex.RUnlock()
+					if !ok {
+						app.Resolver.RWMutex.Lock()
+						(*app.Resolver.entries)[q.Name] = ResolverEntry{NextIPv4: 0}
+						app.Resolver.RWMutex.Unlock()
+					}
+
 					app.Resolver.RWMutex.Lock()
 					resolver = (*app.Resolver.entries)[q.Name]
 					nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)

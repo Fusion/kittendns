@@ -58,6 +58,7 @@ https://github.com/infobloxopen/dnstools/tree/master/mig
 
 ```
 ./mig -s 192.168.1.189 -n 1000000 -d domains.lst -o perf.json
+python2 ../analyser/fit.py results/perf.json
 ```
 
 Results:
@@ -72,11 +73,18 @@ Again, a somewhat unexpected result: a lightly loaded rule engine has almost no 
 
 # Todo
 
-Cache
-- if flattening is enabled, we should cache the flattened version
+## Cache improvements
 
-Flattening
-- What about recursed fragmented answers?
+- If flattening is enabled, we should cache the flattened version.
+- When flattening, what about recursed and fragmented answers?
+
+## Circuit Breaker (when recursing)/Rate Limiter
+
+Because, realistically, it is better to fail some queries if this will allow them to succeed later.
+
+Rate Limiter: should be limiting some misbehaving clients. Problem: how do we identify a "Client?"
+- Is a client a single IP address? If it's a site DNS proxying to us, then it may be allowed higher traffic levels
+- Should we throttle a combination of source + queries?
 
 # Misc
 
