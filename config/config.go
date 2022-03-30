@@ -1,5 +1,13 @@
 package config
 
+import (
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/hydronica/toml"
+)
+
 type Parent struct {
 	// May be suffixed with [:port]
 	Address string
@@ -40,6 +48,10 @@ type Record struct {
 	IPv4  string
 	IPv4s []string
 
+	// AAAA
+	IPv6  string
+	IPv6s []string
+
 	// CNAME
 	Aliased string
 
@@ -73,4 +85,16 @@ type Config struct {
 	Zone     []Zone
 	Records  map[string]Record
 	Rule     []Rule
+}
+
+func GetConfig() *Config {
+	var config Config
+	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+		log.Fatal(err)
+	}
+	// Default parent dns to port 53 is not set
+	if !strings.Contains(config.Settings.Parent.Address, ":") {
+		config.Settings.Parent.Address = fmt.Sprintf("%s:%d", config.Settings.Parent.Address, 53)
+	}
+	return &config
 }

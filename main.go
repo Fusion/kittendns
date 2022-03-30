@@ -12,12 +12,12 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/fusion/kittendns/cache"
 	"github.com/fusion/kittendns/config"
-	"github.com/hydronica/toml"
 	"github.com/miekg/dns"
 )
 
 type ResolverEntry struct {
 	NextIPv4 uint8
+	NextIPv6 uint8
 }
 type Resolver struct {
 	sync.RWMutex
@@ -34,7 +34,7 @@ func main() {
 
 	app := App{}
 
-	app.Config = getConfig()
+	app.Config = config.GetConfig()
 	app.Records = flattenRecords(app.Config)
 	app.Resolver = &Resolver{entries: &map[string]ResolverEntry{}}
 	app.Cache = &cache.RcCache{}
@@ -51,18 +51,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to start server: %s\n ", err.Error())
 	}
-}
-
-func getConfig() *config.Config {
-	var config config.Config
-	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
-		log.Fatal(err)
-	}
-	// Default parent dns to port 53 is not set
-	if !strings.Contains(config.Settings.Parent.Address, ":") {
-		config.Settings.Parent.Address = fmt.Sprintf("%s:%d", config.Settings.Parent.Address, 53)
-	}
-	return &config
 }
 
 func flattenRecords(cfg *config.Config) *map[string]config.Record {
@@ -111,8 +99,9 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 			// CNAME Record
 			if record.Aliased != "" {
 				ipv4 := flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
-				if len(ipv4) > 0 {
-					log.Println("Ignored:: Aliased and IPv4 cannot be set at the same time.")
+				ipv6 := flattenIPs(record.IPv6, record.IPv6s, NotMandatory)
+				if len(ipv4) > 0 || len(ipv6) > 0 {
+					log.Println("Ignored:: Aliased and IPv4/IPv6 cannot be set at the same time.")
 					continue
 				}
 				if record.Host == "@" {
@@ -126,12 +115,18 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 			}
 
 			// A Record
-			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s, Mandatory)
+			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
+			record.IPv6s = flattenIPs(record.IPv6, record.IPv6s, NotMandatory)
 			record.Type = dns.TypeA
 			if record.Host == "@" {
 				records[zone.Origin] = record
 				continue
 			}
+
+			if len(record.IPv4s) == 0 && len(record.IPv6s) == 0 {
+				log.Fatal("Found record with no IPs, not alias.")
+			}
+
 			records[canonicalize(zone.Origin, record.Host)] = record
 		}
 	}
@@ -239,7 +234,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 			answers = []dns.RR{srv}
 		}
 
-	case dns.TypeA, dns.TypeCNAME:
+	case dns.TypeAAAA, dns.TypeA, dns.TypeCNAME:
 		record, ok = (*app.Records)[q.Name]
 		if ok {
 			if record.Type == dns.TypeCNAME {
@@ -248,7 +243,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				}
 				alias := newCNAME(q.Name, record.Aliased, record.TTL)
 				answers = []dns.RR{alias}
-			} else if record.Type == dns.TypeA && q.Qtype != dns.TypeCNAME {
+			} else if (record.Type == dns.TypeA || record.Type == dns.TypeAAAA) && q.Qtype != dns.TypeCNAME {
 				if app.Config.Settings.DebugLevel > 0 {
 					log.Printf("Query for %s\n", q.Name)
 				}
@@ -258,24 +253,48 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 					app.Resolver.RWMutex.RUnlock()
 					if !ok {
 						app.Resolver.RWMutex.Lock()
-						(*app.Resolver.entries)[q.Name] = ResolverEntry{NextIPv4: 0}
+						(*app.Resolver.entries)[q.Name] = ResolverEntry{
+							NextIPv4: 0,
+							NextIPv6: 0}
 						app.Resolver.RWMutex.Unlock()
+					}
+
+					var nextIP *uint8
+					var recordIPs *[]string
+
+					if q.Qtype == dns.TypeAAAA {
+						nextIP = &resolver.NextIPv6
+						recordIPs = &record.IPv6s
+					} else {
+						nextIP = &resolver.NextIPv4
+						recordIPs = &record.IPv4s
+					}
+
+					if len(*recordIPs) == 0 {
+						break
 					}
 
 					app.Resolver.RWMutex.Lock()
 					resolver = (*app.Resolver.entries)[q.Name]
-					nextIPv4, ipv4 := nextIPv4(resolver.NextIPv4, record.IPv4s)
-					resolver.NextIPv4 = nextIPv4
+					nextNextIP, ip := getNextIP(nextIP, recordIPs)
+					*nextIP = nextNextIP
 					(*app.Resolver.entries)[q.Name] = resolver
 					app.Resolver.RWMutex.Unlock()
 
-					rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
+					rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
 					if err == nil {
 						answers = []dns.RR{rr}
 					}
 				} else {
-					for _, ipv4 := range record.IPv4s {
-						rr, err := newRR(q.Name, record.Host, ipv4, record.TTL)
+					var recordIPs *[]string
+
+					if q.Qtype == dns.TypeAAAA {
+						recordIPs = &record.IPv6s
+					} else {
+						recordIPs = &record.IPv4s
+					}
+					for _, ip := range *recordIPs {
+						rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
 						if err == nil {
 							answers = append(answers, rr)
 						}
@@ -357,7 +376,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		if strings.HasPrefix(action, "rewrite ") {
 			shadowIP := unquote(strings.TrimPrefix(action, "rewrite "))
-			rr, _ := newRR(q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL
+			rr, _ := newRR(dns.TypeA, q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL and type
 			m.Answer = append(m.Answer, rr)
 			continue
 		}
@@ -403,13 +422,13 @@ func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question)
 	// TODO Implement rule engine knowing that all answers are within a single message
 }
 
-func nextIPv4(idx uint8, ipv4s []string) (uint8, string) {
-	ipv4 := ipv4s[idx]
-	nextIdx := idx + 1
-	if nextIdx >= uint8(len(ipv4s)) {
+func getNextIP(idx *uint8, ips *[]string) (uint8, string) {
+	ip := (*ips)[*idx]
+	nextIdx := *idx + 1
+	if nextIdx >= uint8(len(*ips)) {
 		nextIdx = 0
 	}
-	return nextIdx, ipv4
+	return nextIdx, ip
 }
 
 func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
@@ -442,13 +461,18 @@ func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
 	return ""
 }
 
-func newRR(query string, host string, ipv4 string, ttl uint32) (dns.RR, error) {
+func newRR(recordType uint16, query string, host string, ip string, ttl uint32) (dns.RR, error) {
+	textType := "A"
+	if recordType == dns.TypeAAAA {
+		textType = "AAAA"
+	}
 	rr, err := dns.NewRR(
 		fmt.Sprintf(
-			"%s %d A %s",
+			"%s %d %s %s",
 			query,
 			ttl,
-			ipv4))
+			textType,
+			ip))
 	return rr, err
 }
 
