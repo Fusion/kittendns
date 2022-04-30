@@ -92,8 +92,8 @@ func GetConfig() *Config {
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		log.Fatal(err)
 	}
-	// Default parent dns to port 53 is not set
-	if !strings.Contains(config.Settings.Parent.Address, ":") {
+	// Default parent dns to port 53 is not set, but parent _is_ set
+	if config.Settings.Parent.Address != "" && !strings.Contains(config.Settings.Parent.Address, ":") {
 		config.Settings.Parent.Address = fmt.Sprintf("%s:%d", config.Settings.Parent.Address, 53)
 	}
 	return &config

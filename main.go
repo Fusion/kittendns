@@ -186,8 +186,9 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 		// This variable will be set to true if this is something
 		// we can resolve locally.
 		authoritative := false
+		lowerName := strings.ToLower(q.Name)
 		for _, zone := range app.Config.Zone {
-			if strings.HasSuffix(q.Name, zone.Origin) {
+			if strings.HasSuffix(lowerName, zone.Origin) {
 				authoritative = true
 				break
 			}
@@ -211,6 +212,8 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 	var record config.Record
 	var ok bool
 
+	lowerName := strings.ToLower(q.Name)
+
 	switch q.Qtype {
 
 	case dns.TypeSOA:
@@ -218,7 +221,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 			log.Printf("Zone SOA Query %s\n", q.Name)
 		}
 		for _, zone := range app.Config.Zone {
-			if zone.Origin == q.Name {
+			if zone.Origin == lowerName {
 				soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
 				m.Ns = []dns.RR{soa}
 			}
@@ -228,14 +231,14 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		if app.Config.Settings.DebugLevel > 0 {
 			log.Printf("SRV Query %s\n", q.Name)
 		}
-		record, ok := (*app.Records)[q.Name]
+		record, ok := (*app.Records)[lowerName]
 		if ok && record.Type == dns.TypeSRV {
 			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
 			answers = []dns.RR{srv}
 		}
 
 	case dns.TypeAAAA, dns.TypeA, dns.TypeCNAME:
-		record, ok = (*app.Records)[q.Name]
+		record, ok = (*app.Records)[lowerName]
 		if ok {
 			if record.Type == dns.TypeCNAME {
 				if app.Config.Settings.DebugLevel > 0 {
@@ -249,11 +252,11 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				}
 				if app.Config.Settings.LoadBalance {
 					app.Resolver.RWMutex.RLock()
-					resolver, ok := (*app.Resolver.entries)[q.Name]
+					resolver, ok := (*app.Resolver.entries)[lowerName]
 					app.Resolver.RWMutex.RUnlock()
 					if !ok {
 						app.Resolver.RWMutex.Lock()
-						(*app.Resolver.entries)[q.Name] = ResolverEntry{
+						(*app.Resolver.entries)[lowerName] = ResolverEntry{
 							NextIPv4: 0,
 							NextIPv6: 0}
 						app.Resolver.RWMutex.Unlock()
@@ -275,10 +278,10 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 					}
 
 					app.Resolver.RWMutex.Lock()
-					resolver = (*app.Resolver.entries)[q.Name]
+					resolver = (*app.Resolver.entries)[lowerName]
 					nextNextIP, ip := getNextIP(nextIP, recordIPs)
 					*nextIP = nextNextIP
-					(*app.Resolver.entries)[q.Name] = resolver
+					(*app.Resolver.entries)[lowerName] = resolver
 					app.Resolver.RWMutex.Unlock()
 
 					rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
@@ -346,7 +349,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 	}
 
 	for _, answer := range answers {
-		action := app.parseRules(remoteip, q.Name, answer)
+		action := app.parseRules(remoteip, lowerName, answer)
 		if action == "" {
 			if app.Config.Settings.DebugLevel > 2 {
 				log.Println("Providing answer", answer)
@@ -384,7 +387,17 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 }
 
 func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
-	answers, ok, remaining := app.Cache.Get(q.Name)
+	if app.Config.Settings.Parent.Address == "" {
+		if app.Config.Settings.DebugLevel > 2 {
+			log.Println("Not recursing as no parent was defined.")
+		}
+		return
+
+	}
+
+	lowerName := strings.ToLower(q.Name)
+
+	answers, ok, remaining := app.Cache.Get(lowerName)
 	if ok {
 		if app.Config.Settings.DebugLevel > 2 {
 			log.Println("Cache hit for", q.Name, "remaining", remaining, "seconds")
@@ -411,7 +424,7 @@ func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question)
 		}
 		app.Cache.Set(
 			cache.Flatten,
-			q.Name,
+			lowerName,
 			q.Qtype,
 			response.Answer,
 			uint32(response.Answer[0].Header().Ttl))
