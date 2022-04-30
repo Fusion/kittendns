@@ -137,6 +137,9 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 }
 
 func canonicalize(origin string, host string) string {
+	if host == "@" {
+		return origin
+	}
 	if strings.HasSuffix(host, ".") {
 		return host
 	}

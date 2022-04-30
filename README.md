@@ -73,10 +73,6 @@ Again, a somewhat unexpected result: a lightly loaded rule engine has almost no 
 
 # Todo
 
-## Aliasing
-
-Support alias to "@"
-
 ## Cache improvements
 
 - If flattening is enabled, we should cache the flattened version.
