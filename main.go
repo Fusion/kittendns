@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/antonmedv/expr"
 	"github.com/davecgh/go-spew/spew"
@@ -44,12 +47,23 @@ func main() {
 
 	// start server
 	port := int(app.Config.Settings.Listen)
-	server := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
+	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
+	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp"}
 	log.Printf("Listening on port %d\n", port)
-	err := server.ListenAndServe()
-	defer server.Shutdown()
-	if err != nil {
-		log.Fatalf("Failed to start server: %s\n ", err.Error())
+	go server_u.ListenAndServe()
+	go server_t.ListenAndServe()
+
+	// server lifecycle
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+toplevel:
+	for {
+		select {
+		case _ = <-sig:
+			log.Printf("Signal received, stopping.\n")
+			break toplevel
+		}
 	}
 }
 
@@ -225,8 +239,9 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		for _, zone := range app.Config.Zone {
 			if zone.Origin == lowerName {
-				soa := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
-				m.Ns = []dns.RR{soa}
+				soaanswer := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
+				answers = []dns.RR{soaanswer}
+				break
 			}
 		}
 
