@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/fusion/kittendns/secret"
 	"github.com/hydronica/toml"
 )
 
@@ -88,6 +89,7 @@ type Config struct {
 	Zone     []Zone
 	Records  map[string]Record
 	Rule     []Rule
+	Secret   secret.Secret
 }
 
 func GetConfig() *Config {
@@ -95,6 +97,13 @@ func GetConfig() *Config {
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		log.Fatal(err)
 	}
+	var secret secret.Secret
+	// TODO Place secret in another, convenient location!
+	if _, err := toml.DecodeFile("secret.toml", &secret); err != nil {
+		log.Fatal(err)
+	}
+	config.Secret = secret
+
 	// Default parent dns to port 53 is not set, but parent _is_ set
 	if config.Settings.Parent.Address != "" && !strings.Contains(config.Settings.Parent.Address, ":") {
 		config.Settings.Parent.Address = fmt.Sprintf("%s:%d", config.Settings.Parent.Address, 53)

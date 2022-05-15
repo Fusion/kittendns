@@ -49,6 +49,10 @@ func main() {
 	port := int(app.Config.Settings.Listen)
 	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
 	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
+	if app.Config.Secret.Signature != "" {
+		server_u.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
+		server_t.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
+	}
 	log.Printf("Listening on port %d\n", port)
 	go server_u.ListenAndServe()
 	go server_t.ListenAndServe()
@@ -79,7 +83,7 @@ func moreLenientAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 	// Don't allow dynamic updates, because then the sections can contain a whole bunch of RRs.
 	opcode := int(dh.Bits>>11) & 0xF
 
-	log.Printf("opcode: %+v %+v %+v %+v %+v", opcode, dh.Qdcount, dh.Ancount, dh.Nscount, dh.Arcount)
+	//log.Printf("opcode: %+v %+v %+v %+v %+v", opcode, dh.Qdcount, dh.Ancount, dh.Nscount, dh.Arcount)
 
 	if opcode != dns.OpcodeQuery && opcode != dns.OpcodeNotify && opcode != dns.OpcodeUpdate {
 		return dns.MsgRejectNotImplemented
@@ -146,7 +150,6 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 				}
 				record.Type = dns.TypeSRV
 				records[fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin)] = record
-				fmt.Println(fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin))
 				continue
 			}
 
@@ -245,6 +248,18 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 	m.Compress = false
 	m.Authoritative = true
 
+	for _, e := range r.Extra {
+		// Are you trying to escalate privilege, maybe?
+		if e.Header().Rrtype == dns.TypeTSIG {
+			if w.TsigStatus() != nil {
+				log.Println("TSIG not validated:", w.TsigStatus())
+				w.WriteMsg(m)
+				return
+			}
+			ctx = context.WithValue(ctx, "privileged", true)
+		}
+	}
+
 	switch r.Opcode {
 	case dns.OpcodeQuery:
 		app.parseQuery(ctx, m)
@@ -280,7 +295,6 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 }
 
 func (app *App) parseUpdate(ctx context.Context, m *dns.Msg) {
-	log.Println("Parsing udpdate")
 	for _, n := range m.Ns {
 		app.authoritativeUpdate(ctx, m, n, m.Extra)
 	}
@@ -486,12 +500,28 @@ func (app *App) authoritativeUpdate(ctx context.Context, m *dns.Msg, n dns.RR, e
 	if n.Header().Rrtype == dns.TypeTXT {
 		entry, _ := n.(*dns.TXT)
 		if len(entry.Txt) != 1 {
-			log.Println("I do not knowm yet, how to handle records of a size other than 1.")
+			log.Println("I do not know, yet, how to handle records of a size other than 1.")
 			return
 		}
 		recordName := entry.Header().Name
 		recordTxt := entry.Txt[0]
-		fmt.Println(recordName, recordTxt)
+		ttl := entry.Header().Ttl
+
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("Zone TXT Update %s (%d) -> %s\n", recordName, ttl, recordTxt)
+		}
+
+		if ctx.Value("privileged") == nil {
+			log.Println("TXT update: Not privileged.")
+			return
+		}
+
+		(*app.Records)[recordName] = config.Record{
+			Type:   dns.TypeTXT,
+			Text:   recordName,
+			Target: recordTxt,
+			TTL:    ttl,
+		}
 	}
 	/*
 		lowerName := strings.ToLower(q.Name)
