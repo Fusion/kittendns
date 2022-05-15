@@ -47,8 +47,8 @@ func main() {
 
 	// start server
 	port := int(app.Config.Settings.Listen)
-	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp"}
-	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp"}
+	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
+	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
 	log.Printf("Listening on port %d\n", port)
 	go server_u.ListenAndServe()
 	go server_t.ListenAndServe()
@@ -65,6 +65,41 @@ toplevel:
 			break toplevel
 		}
 	}
+}
+
+const (
+	_QR = 1 << 15 // query/response (response=1)
+)
+
+func moreLenientAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
+	if isResponse := dh.Bits&_QR != 0; isResponse {
+		return dns.MsgIgnore
+	}
+
+	// Don't allow dynamic updates, because then the sections can contain a whole bunch of RRs.
+	opcode := int(dh.Bits>>11) & 0xF
+
+	log.Printf("opcode: %+v %+v %+v %+v %+v", opcode, dh.Qdcount, dh.Ancount, dh.Nscount, dh.Arcount)
+
+	if opcode != dns.OpcodeQuery && opcode != dns.OpcodeNotify && opcode != dns.OpcodeUpdate {
+		return dns.MsgRejectNotImplemented
+	}
+
+	if dh.Qdcount != 1 {
+		return dns.MsgReject
+	}
+	// NOTIFY requests can have a SOA in the ANSWER section. See RFC 1996 Section 3.7 and 3.11.
+	if dh.Ancount > 1 {
+		return dns.MsgReject
+	}
+	// IXFR request could have one SOA RR in the NS section. See RFC 1995, section 3.
+	if dh.Nscount > 1 {
+		return dns.MsgReject
+	}
+	if dh.Arcount > 2 {
+		return dns.MsgReject
+	}
+	return dns.MsgAccept
 }
 
 func flattenRecords(cfg *config.Config) *map[string]config.Record {
@@ -91,6 +126,10 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 					log.Println("Ignored:: Host and Service cannot be set at the same time.")
 					continue
 				}
+				if record.Text != "" {
+					log.Println("Ignored:: Text and Service cannot be set at the same time.")
+					continue
+				}
 				if record.Target == "" {
 					log.Println("Ignored:: No Target specified for a Service.")
 					continue
@@ -107,6 +146,22 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 				}
 				record.Type = dns.TypeSRV
 				records[fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin)] = record
+				fmt.Println(fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin))
+				continue
+			}
+
+			// TXT Record
+			if record.Text != "" {
+				if record.Host != "" {
+					log.Println("Ignored:: Host and Text cannot be set at the same time.")
+					continue
+				}
+				if record.Target == "" {
+					log.Println("Ignored:: No Target specified for a Text record.")
+					continue
+				}
+				record.Type = dns.TypeTXT
+				records[fmt.Sprintf("%s.%s", record.Text, zone.Origin)] = record
 				continue
 			}
 
@@ -193,6 +248,9 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 	switch r.Opcode {
 	case dns.OpcodeQuery:
 		app.parseQuery(ctx, m)
+	case dns.OpcodeUpdate:
+		m.Ns = r.Ns
+		app.parseUpdate(ctx, m)
 	}
 
 	w.WriteMsg(m)
@@ -218,6 +276,13 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			app.recursiveSearch(ctx, m, q)
 		}
 
+	}
+}
+
+func (app *App) parseUpdate(ctx context.Context, m *dns.Msg) {
+	log.Println("Parsing udpdate")
+	for _, n := range m.Ns {
+		app.authoritativeUpdate(ctx, m, n, m.Extra)
 	}
 }
 
@@ -253,6 +318,16 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		if ok && record.Type == dns.TypeSRV {
 			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
 			answers = []dns.RR{srv}
+		}
+
+	case dns.TypeTXT:
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("TXT Query %s\n", q.Name)
+		}
+		record, ok := (*app.Records)[lowerName]
+		if ok && record.Type == dns.TypeTXT {
+			txt := newTXT(q.Name, record.Target, record.TTL)
+			answers = []dns.RR{txt}
 		}
 
 	case dns.TypeAAAA, dns.TypeA, dns.TypeCNAME:
@@ -404,6 +479,44 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 	}
 }
 
+func (app *App) authoritativeUpdate(ctx context.Context, m *dns.Msg, n dns.RR, extra []dns.RR) {
+	// TXT only for now!
+	// I could assume that the question section will always contain the SOA name.
+	// I have a strong feeling that this would be a mistake. Therefore I am going in a different direction.
+	if n.Header().Rrtype == dns.TypeTXT {
+		entry, _ := n.(*dns.TXT)
+		if len(entry.Txt) != 1 {
+			log.Println("I do not knowm yet, how to handle records of a size other than 1.")
+			return
+		}
+		recordName := entry.Header().Name
+		recordTxt := entry.Txt[0]
+		fmt.Println(recordName, recordTxt)
+	}
+	/*
+		lowerName := strings.ToLower(q.Name)
+
+		switch q.Qtype {
+
+		case dns.TypeSOA:
+			if app.Config.Settings.DebugLevel > 0 {
+				log.Printf("Zone SOA Update %s\n", q.Name)
+			}
+			for _, zone := range app.Config.Zone {
+				if zone.Origin == lowerName {
+					log.Println("I WILL UPDATE, YES")
+					spew.Dump(m)
+					break
+				}
+			}
+		default:
+			if app.Config.Settings.DebugLevel > 0 {
+				log.Println(fmt.Sprintf("Not supported: request type=%d", q.Qtype))
+			}
+		}
+	*/
+}
+
 func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
 	if app.Config.Settings.Parent.Address == "" {
 		if app.Config.Settings.DebugLevel > 2 {
@@ -530,6 +643,18 @@ func newSRV(query string, target string, port uint16, priority uint16, weight ui
 	srv.Priority = priority
 	srv.Weight = weight
 	srv.Target = target
+	return srv
+}
+
+func newTXT(query string, target string, ttl uint32) dns.RR {
+	srv := new(dns.TXT)
+	srv.Hdr = dns.RR_Header{
+		Name:     query,
+		Rrtype:   dns.TypeTXT,
+		Class:    dns.ClassINET,
+		Ttl:      ttl,
+		Rdlength: 0}
+	srv.Txt = []string{target}
 	return srv
 }
 

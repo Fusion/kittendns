@@ -63,6 +63,9 @@ type Record struct {
 	Port     uint16
 	Target   string
 
+	// TXT
+	Text string
+
 	Origin string
 	TTL    uint32
 	Auth   Auth
