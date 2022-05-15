@@ -1,2 +1,4 @@
 config.toml
+secret.toml
+thirdparty
 kittendns

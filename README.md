@@ -13,6 +13,25 @@ Several goals:
 
 Take a look at the content of the `config.toml.template` file. Copy it to `config.toml` and run.
 
+# RFC2136 and LetsEncrypt compatibility
+
+It is possible to run e.g. `certbot` and use this software to automatically provide the answers that LetsEncrypt needs to validate that it can deliver a certificate for a given domain:
+
+```
+certbot certonly --test-cert -m you@example.com \
+    --config-dir . --work-dir . --logs-dir . \
+    --dns-rfc2136 \
+    --dns-rfc2136-propagation-seconds 5 \
+    --dns-rfc2136-credentials=secrets.ini \
+    -d yourhost.example.com
+```
+
+Note: remove `--test-cert` to get a production certificate.
+
+# DNS Synchronization
+
+There is currently no notion of primary and secondary DNS. All your DNS instances are equal. It would be fairly easy to implement `IXFR/AXFR` but unless it becomes a mandatory feature, this seems to go against my "no fat/easy to configure" goals. With this being said, you could use something like [Syncthing](https://syncthing.net/) to keep `config.toml` current.
+
 # Tell me more about the DNS repository
 
 In the `github.com/miekg/dns` repository, there was a pull request allowing code using that library to retrieve additional information about the requesting socket. This includes source IP, which can be convenient in a split horizon environment. It lives in this directory (slightly adapted)
