@@ -14,8 +14,9 @@ type Parent struct {
 	Address string
 }
 type Settings struct {
-	Listen     uint16
 	DebugLevel uint8
+	AutoReload bool
+	Listen     uint16
 	// If true, when multiple records are found for a domain, only one is returned
 	// A different one every time.
 	// If false, all records are returned.

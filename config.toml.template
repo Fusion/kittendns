@@ -1,6 +1,7 @@
 [settings]
-listen = 53
 debuglevel = 1
+autoreload = true
+listen = 53
 # Cache recursive queries.
 cache = true
 # Flatten CNAME chains down to A records. Not fully functional yet.

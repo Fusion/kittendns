@@ -13,6 +13,7 @@ import (
 
 	"github.com/antonmedv/expr"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/fsnotify/fsnotify"
 	"github.com/fusion/kittendns/cache"
 	"github.com/fusion/kittendns/config"
 	"github.com/miekg/dns"
@@ -35,38 +36,68 @@ type App struct {
 
 func main() {
 
-	app := App{}
-
-	app.Config = config.GetConfig()
-	app.Records = flattenRecords(app.Config)
-	app.Resolver = &Resolver{entries: &map[string]ResolverEntry{}}
-	app.Cache = &cache.RcCache{}
-
-	// attach request handler func
-	dns.HandleFunc(".", app.handleDnsRequest)
-
-	// start server
-	port := int(app.Config.Settings.Listen)
-	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
-	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
-	if app.Config.Secret.Signature != "" {
-		server_u.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
-		server_t.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
-	}
-	log.Printf("Listening on port %d\n", port)
-	go server_u.ListenAndServe()
-	go server_t.ListenAndServe()
-
-	// server lifecycle
-	sig := make(chan os.Signal)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-toplevel:
+level1:
 	for {
-		select {
-		case _ = <-sig:
-			log.Printf("Signal received, stopping.\n")
-			break toplevel
+		app := App{}
+
+		app.Config = config.GetConfig()
+		app.Records = flattenRecords(app.Config)
+		app.Resolver = &Resolver{entries: &map[string]ResolverEntry{}}
+		app.Cache = &cache.RcCache{}
+
+		// attach request handler func
+		dns.HandleFunc(".", app.handleDnsRequest)
+
+		// start server
+		port := int(app.Config.Settings.Listen)
+		server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
+		server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
+		if app.Config.Secret.Signature != "" {
+			server_u.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
+			server_t.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
+		}
+		log.Printf("Listening on port %d\n", port)
+		go server_u.ListenAndServe()
+		go server_t.ListenAndServe()
+
+		// server lifecycle
+		sig := make(chan os.Signal)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			log.Println("Warning: unable to start watching config changes.")
+			return
+		}
+		defer watcher.Close()
+
+		if app.Config.Settings.AutoReload {
+			log.Println("Watching config for changes.")
+			watchable := []string{"config.toml", "secret.toml"}
+			for _, path := range watchable {
+				if err := watcher.Add(path); err != nil {
+					log.Println("Warning: unable to start watching config changes.")
+					break
+				}
+			}
+		}
+
+	level2:
+		for {
+			select {
+			case event := <-watcher.Events:
+				if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Rename == fsnotify.Rename {
+					log.Printf("Config file changed, reloading.\n")
+					break level2
+				}
+			case received := <-sig:
+				if received == syscall.SIGHUP {
+					log.Printf("Signal %s received, restarting.\n", received.String())
+					break level2
+				}
+				log.Printf("Signal %s received, stopping.\n", received.String())
+				break level1
+			}
 		}
 	}
 }
