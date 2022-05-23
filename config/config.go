@@ -41,6 +41,13 @@ type Auth struct {
 	Serial uint32
 }
 
+type Mailer struct {
+	Host     string
+	Priority uint16
+	TTL      uint32
+	NoMailer bool
+}
+
 type Record struct {
 	Type uint16
 
@@ -58,12 +65,13 @@ type Record struct {
 	Aliased string
 
 	// SRV
-	Service  string
-	Proto    string
-	Priority uint16
-	Weight   uint16
-	Port     uint16
-	Target   string
+	Service   string
+	Priority  uint16
+	Proto     string
+	Weight    uint16
+	Port      uint16
+	Target    string
+	NoService bool
 
 	// TXT
 	Text string
@@ -78,6 +86,7 @@ type Zone struct {
 	TTL    uint32
 	Auth   Auth
 	Record []Record
+	Mailer []Mailer
 }
 
 type Rule struct {

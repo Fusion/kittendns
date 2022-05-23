@@ -105,6 +105,14 @@ Rate Limiter: should be limiting some misbehaving clients. Problem: how do we id
 - Is a client a single IP address? If it's a site DNS proxying to us, then it may be allowed higher traffic levels
 - Should we throttle a combination of source + queries?
 
+# FAQ
+
+Q: I noticed that you are storing similar records in separate structures. For instance, there is one entry for a A (v4) record,
+and another entry for its AAAA (v6) counterpart. This is wastful!
+
+A: You are correct. However, I should not store both entries using the same key because they can both be capitalized differently.
+And, little known fact, capitalization in DNS can be a security feature.
+
 # Misc
 
 <div>Logo created by <a href="https://www.designevo.com/" title="Free Online Logo Maker">DesignEvo logo maker</a></div>

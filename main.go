@@ -27,11 +27,12 @@ type ResolverEntry struct {
 }
 type Resolver struct {
 	sync.RWMutex
-	entries *map[string]ResolverEntry
+	entries *map[uint16]map[string]ResolverEntry
 }
 type App struct {
 	Config   *config.Config
-	Records  *map[string]config.Record
+	Records  *map[uint16]map[string]config.Record
+	Mailers  *map[string][]config.Mailer
 	Resolver *Resolver
 	Cache    *cache.RcCache
 }
@@ -48,8 +49,18 @@ func singleLifeCycle() error {
 	app := App{}
 
 	app.Config = config.GetConfig()
+	app.Mailers = flattenMailers(app.Config)
 	app.Records = flattenRecords(app.Config)
-	app.Resolver = &Resolver{entries: &map[string]ResolverEntry{}}
+	app.Resolver = &Resolver{entries: &map[uint16]map[string]ResolverEntry{
+		dns.TypeA:     {},
+		dns.TypeAAAA:  {},
+		dns.TypeCNAME: {},
+		//dns.TypeNS: {},
+		//dns.TypePTR: {},
+		dns.TypeSOA: {},
+		dns.TypeSRV: {},
+		dns.TypeTXT: {},
+	}}
 	app.Cache = &cache.RcCache{}
 
 	// attach request handler func
@@ -147,10 +158,50 @@ func moreLenientAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 	return dns.MsgAccept
 }
 
-func flattenRecords(cfg *config.Config) *map[string]config.Record {
+func flattenMailers(cfg *config.Config) *map[string][]config.Mailer {
+	mailers := map[string][]config.Mailer{}
+	for _, zone := range cfg.Zone {
+		if zone.Mailer != nil {
+			zoneMailers := []config.Mailer{}
+			noMailer := false
+			for _, mailer := range zone.Mailer {
+				if mailer.TTL == 0 {
+					mailer.TTL = zone.TTL
+				}
+				if mailer.NoMailer {
+					noMailer = true
+					continue
+				}
+				mailer.Host = canonicalize(zone.Origin, mailer.Host)
+				zoneMailers = append(zoneMailers, mailer)
+			}
+			// RFC7505
+			if noMailer {
+				if len(zoneMailers) > 0 {
+					log.Println("Ignored:: Defined both 'no mailer' and actual mailers.")
+				} else {
+					zoneMailers = []config.Mailer{{Host: ".", Priority: 0, TTL: zone.TTL}}
+				}
+			}
+			mailers[zone.Origin] = zoneMailers
+		}
+	}
+	return &mailers
+}
+
+func flattenRecords(cfg *config.Config) *map[uint16]map[string]config.Record {
 	var noAuth config.Auth
 
-	records := map[string]config.Record{}
+	records := map[uint16]map[string]config.Record{
+		dns.TypeA:     {},
+		dns.TypeAAAA:  {},
+		dns.TypeCNAME: {},
+		//dns.TypeNS: {},
+		//dns.TypePTR: {},
+		dns.TypeSOA: {},
+		dns.TypeSRV: {},
+		dns.TypeTXT: {},
+	}
 	for _, zone := range cfg.Zone {
 		for _, record := range zone.Record {
 			if zone.Auth != noAuth {
@@ -175,6 +226,14 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 					log.Println("Ignored:: Text and Service cannot be set at the same time.")
 					continue
 				}
+				if record.Target != "" && record.NoService {
+					log.Println("Ignored:: Both 'no service' and an actual target defined for Service.")
+					continue
+				}
+				// RFC2782
+				if record.NoService {
+					record.Target = "."
+				}
 				if record.Target == "" {
 					log.Println("Ignored:: No Target specified for a Service.")
 					continue
@@ -190,10 +249,8 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 					record.Weight = 10
 				}
 				record.Type = dns.TypeSRV
-				records[fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin)] = record
-				continue
+				records[dns.TypeSRV][fmt.Sprintf("_%s._%s.%s", record.Service, record.Proto, zone.Origin)] = record
 			}
-
 			// TXT Record
 			if record.Text != "" {
 				if record.Host != "" {
@@ -205,14 +262,13 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 					continue
 				}
 				record.Type = dns.TypeTXT
-				records[fmt.Sprintf("%s.%s", record.Text, zone.Origin)] = record
-				continue
+				records[dns.TypeTXT][fmt.Sprintf("%s.%s", record.Text, zone.Origin)] = record
 			}
-
+			// Finally, our default resolution records
+			ipv4 := flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
+			ipv6 := flattenIPs(record.IPv6, record.IPv6s, NotMandatory)
 			// CNAME Record
 			if record.Aliased != "" {
-				ipv4 := flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
-				ipv6 := flattenIPs(record.IPv6, record.IPv6s, NotMandatory)
 				if len(ipv4) > 0 || len(ipv6) > 0 {
 					log.Println("Ignored:: Aliased and IPv4/IPv6 cannot be set at the same time.")
 					continue
@@ -223,24 +279,26 @@ func flattenRecords(cfg *config.Config) *map[string]config.Record {
 				}
 				record.Aliased = canonicalize(record.Origin, record.Aliased)
 				record.Type = dns.TypeCNAME
-				records[canonicalize(zone.Origin, record.Host)] = record
+				records[dns.TypeCNAME][canonicalize(zone.Origin, record.Host)] = record
 				continue
 			}
-
+			if len(ipv4) == 0 && len(ipv6) == 0 {
+				continue
+			}
 			// A Record
-			record.IPv4s = flattenIPs(record.IPv4, record.IPv4s, NotMandatory)
-			record.IPv6s = flattenIPs(record.IPv6, record.IPv6s, NotMandatory)
+			record.IPv4s = ipv4
+			record.IPv6s = ipv6
 			record.Type = dns.TypeA
 			if record.Host == "@" {
-				records[zone.Origin] = record
+				records[dns.TypeA][zone.Origin] = record
 				continue
 			}
-
-			if len(record.IPv4s) == 0 && len(record.IPv6s) == 0 {
-				log.Fatal("Found record with no IPs, not alias.")
-			}
-
-			records[canonicalize(zone.Origin, record.Host)] = record
+			/*
+				if len(record.IPv4s) == 0 && len(record.IPv6s) == 0 {
+					log.Fatal("Found record with no IPs, not alias.")
+				}
+			*/
+			records[dns.TypeA][canonicalize(zone.Origin, record.Host)] = record
 		}
 	}
 	if cfg.Settings.DebugLevel > 2 {
@@ -253,10 +311,13 @@ func canonicalize(origin string, host string) string {
 	if host == "@" {
 		return origin
 	}
-	if strings.HasSuffix(host, ".") {
-		return host
+	if !strings.Contains((host), ".") {
+		host = fmt.Sprintf("%s.%s", host, origin)
 	}
-	return fmt.Sprintf("%s.%s", host, origin)
+	if !strings.HasSuffix(host, ".") {
+		host = fmt.Sprintf("%s.", host)
+	}
+	return host
 }
 
 type MandatoryValue int
@@ -331,7 +392,6 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			// TODO Check if RecursionRequested
 			app.recursiveSearch(ctx, m, q)
 		}
-
 	}
 }
 
@@ -369,8 +429,8 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		if app.Config.Settings.DebugLevel > 0 {
 			log.Printf("SRV Query %s\n", q.Name)
 		}
-		record, ok := (*app.Records)[lowerName]
-		if ok && record.Type == dns.TypeSRV {
+		record, ok := (*app.Records)[dns.TypeSRV][lowerName]
+		if ok {
 			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
 			answers = []dns.RR{srv}
 		}
@@ -379,14 +439,29 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		if app.Config.Settings.DebugLevel > 0 {
 			log.Printf("TXT Query %s\n", q.Name)
 		}
-		record, ok := (*app.Records)[lowerName]
-		if ok && record.Type == dns.TypeTXT {
+		record, ok := (*app.Records)[dns.TypeTXT][lowerName]
+		if ok {
 			txt := newTXT(q.Name, record.Target, record.TTL)
 			answers = []dns.RR{txt}
 		}
 
+	case dns.TypeMX:
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("MX Query %s\n", q.Name)
+		}
+		mailers, ok := (*app.Mailers)[lowerName]
+		if ok {
+			for _, mailer := range mailers {
+				mx := newMX(q.Name, mailer.Host, mailer.Priority, mailer.TTL)
+				answers = append(answers, mx)
+			}
+		}
+
 	case dns.TypeAAAA, dns.TypeA, dns.TypeCNAME:
-		record, ok = (*app.Records)[lowerName]
+		record, ok = (*app.Records)[dns.TypeA][lowerName]
+		if !ok {
+			record, ok = (*app.Records)[dns.TypeCNAME][lowerName]
+		}
 		if ok {
 			if record.Type == dns.TypeCNAME {
 				if app.Config.Settings.DebugLevel > 0 {
@@ -400,11 +475,11 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				}
 				if app.Config.Settings.LoadBalance {
 					app.Resolver.RWMutex.RLock()
-					resolver, ok := (*app.Resolver.entries)[lowerName]
+					resolver, ok := (*app.Resolver.entries)[record.Type][lowerName]
 					app.Resolver.RWMutex.RUnlock()
 					if !ok {
 						app.Resolver.RWMutex.Lock()
-						(*app.Resolver.entries)[lowerName] = ResolverEntry{
+						(*app.Resolver.entries)[record.Type][lowerName] = ResolverEntry{
 							NextIPv4: 0,
 							NextIPv6: 0}
 						app.Resolver.RWMutex.Unlock()
@@ -426,10 +501,10 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 					}
 
 					app.Resolver.RWMutex.Lock()
-					resolver = (*app.Resolver.entries)[lowerName]
+					resolver = (*app.Resolver.entries)[record.Type][lowerName]
 					nextNextIP, ip := getNextIP(nextIP, recordIPs)
 					*nextIP = nextNextIP
-					(*app.Resolver.entries)[lowerName] = resolver
+					(*app.Resolver.entries)[record.Type][lowerName] = resolver
 					app.Resolver.RWMutex.Unlock()
 
 					rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
@@ -557,7 +632,7 @@ func (app *App) authoritativeUpdate(ctx context.Context, m *dns.Msg, n dns.RR, e
 			return
 		}
 
-		(*app.Records)[recordName] = config.Record{
+		(*app.Records)[dns.TypeTXT][recordName] = config.Record{
 			Type:   dns.TypeTXT,
 			Text:   recordName,
 			Target: recordTxt,
@@ -727,6 +802,18 @@ func newTXT(query string, target string, ttl uint32) dns.RR {
 		Rdlength: 0}
 	srv.Txt = []string{target}
 	return srv
+}
+
+func newMX(query string, host string, priority uint16, ttl uint32) dns.RR {
+	mailer := new(dns.MX)
+	mailer.Hdr = dns.RR_Header{
+		Name:   query,
+		Rrtype: dns.TypeMX,
+		Class:  dns.ClassINET,
+		Ttl:    ttl}
+	mailer.Mx = host
+	mailer.Preference = priority
+	return mailer
 }
 
 func newSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
