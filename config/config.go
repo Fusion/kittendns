@@ -94,11 +94,19 @@ type Rule struct {
 	Action    string
 }
 
+type Plugin struct {
+	Enabled     bool
+	Path        string
+	PreHandler  string
+	PostHandler string
+}
+
 type Config struct {
 	Settings Settings
 	Zone     []Zone
 	Records  map[string]Record
 	Rule     []Rule
+	Plugin   []Plugin
 	Secret   secret.Secret
 }
 
