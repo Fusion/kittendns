@@ -1,5 +1,7 @@
 build:
-	@go build -ldflags="-s -w" -o kittendns main.go
+	@go build -ldflags="-s -w" -o bin/kittendns main.go
+
+include plugins/Makefile
 
 release:
 	@goreleaser release

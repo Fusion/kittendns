@@ -18,6 +18,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/fusion/kittendns/cache"
 	"github.com/fusion/kittendns/config"
+	"github.com/fusion/kittendns/plugins"
 	"github.com/miekg/dns"
 )
 
@@ -31,6 +32,7 @@ type Resolver struct {
 }
 type App struct {
 	Config   *config.Config
+	Plugins  *plugins.Plugins
 	Records  *map[uint16]map[string]config.Record
 	Mailers  *map[string][]config.Mailer
 	Resolver *Resolver
@@ -49,6 +51,7 @@ func singleLifeCycle() error {
 	app := App{}
 
 	app.Config = config.GetConfig()
+	app.Plugins = plugins.Load(app.Config)
 	app.Mailers = flattenMailers(app.Config)
 	app.Records = flattenRecords(app.Config)
 	app.Resolver = &Resolver{entries: &map[uint16]map[string]ResolverEntry{
@@ -375,6 +378,13 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 
 func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 	for _, q := range m.Question {
+		done, err := app.processPrePlugins(ctx, m, &q)
+		if done {
+			continue
+		}
+		if err != nil {
+			break
+		}
 		// This variable will be set to true if this is something
 		// we can resolve locally.
 		authoritative := false
@@ -387,12 +397,59 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 		}
 		if authoritative {
 			app.authoritativeSearch(ctx, m, q)
-			continue
 		} else {
 			// TODO Check if RecursionRequested
 			app.recursiveSearch(ctx, m, q)
 		}
+		err = app.processPostPlugins(ctx, m, &q)
+		if err != nil {
+			break
+		}
 	}
+}
+
+func (app *App) processPrePlugins(ctx context.Context, m *dns.Msg, q *dns.Question) (bool, error) {
+	done := false
+	for _, plugin := range app.Plugins.PreHandler {
+		update, err := plugin.ProcessQuery(plugins.Pre, m, q)
+		if err != nil {
+			return false, err
+		}
+		if update != nil {
+			if update.Done {
+				done = true
+			}
+			if update.Action == plugins.Reply {
+				m.Answer = append(m.Answer, update.RR...)
+			} else if update.Action == plugins.Question {
+				q = update.Question
+			}
+			if update.Stop {
+				return done, nil
+			}
+		}
+	}
+	return done, nil
+}
+
+func (app *App) processPostPlugins(ctx context.Context, m *dns.Msg, q *dns.Question) error {
+	for _, plugin := range app.Plugins.PostHandler {
+		update, err := plugin.ProcessQuery(plugins.Post, m, q)
+		if err != nil {
+			return err
+		}
+		if update != nil {
+			if update.Action == plugins.Reply {
+				m.Answer = append(m.Answer, update.RR...)
+			} else if update.Action == plugins.Rewrite {
+				m.Answer = update.RR
+			}
+			if update.Stop {
+				return nil
+			}
+		}
+	}
+	return nil
 }
 
 func (app *App) parseUpdate(ctx context.Context, m *dns.Msg) {

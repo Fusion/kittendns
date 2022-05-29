@@ -1,0 +1,1 @@
+include plugins/example/Makefile
