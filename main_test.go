@@ -59,9 +59,21 @@ func TestService(t *testing.T) {
 }
 
 func TestMultiA(t *testing.T) {
-	result := runit("test.example.com", "A")
-	if !lookup(result, `(?s)ANSWER SECTION:+test.example.com. 20 IN A 192.168.1.2+test.example.com. 20 IN A 192.168.2.2+test.example.com. 20 IN A 192.168.3.2`) {
-		inform(t, `three A records for test.example.com`, result)
+	// If we are running the jsscript plugin, by default we will have modified our TTL.
+	// Detect plugin
+	result := runit("magic.example.com", "TXT")
+	if !lookup(result, `(?s)ANSWER SECTION:+magic.example.com. 60 IN TXT`) {
+		// No plugin detected
+		result = runit("test.example.com", "A")
+		if !lookup(result, `(?s)ANSWER SECTION:+test.example.com. 20 IN A 192.168.1.2+test.example.com. 20 IN A 192.168.2.2+test.example.com. 20 IN A 192.168.3.2`) {
+			inform(t, `three A records for test.example.com`, result)
+		}
+	} else {
+		// Plugin detected
+		result = runit("test.example.com", "A")
+		if !lookup(result, `(?s)ANSWER SECTION:+test.example.com. 3600 IN A 192.168.1.2+test.example.com. 3600 IN A 192.168.2.2+test.example.com. 3600 IN A 192.168.3.2`) {
+			inform(t, `three A records for test.example.com (with jsscript plugin)`, result)
+		}
 	}
 }
 
