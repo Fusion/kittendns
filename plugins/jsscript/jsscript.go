@@ -20,7 +20,10 @@ var (
 	instance *jsscriptHandler
 )
 
+func main() {} // Keeping toolchain happy
+
 func JsScriptPreHandler(arguments []string) plugins.PreHandler {
+	instance = nil
 	thisinit(arguments)
 	return instance
 }

@@ -1,9 +1,13 @@
+SHELL := /bin/bash
+
 build:
-	@go build -ldflags="-s -w" -o bin/kittendns main.go
+	@goreleaser build --skip-validate --single-target --rm-dist
 
-include plugins/Makefile
+test:
+	@go test
 
+# Note that sourceme contains GITHUB_TOKEN for release.
 release:
-	@goreleaser release
+	@source sourceme && goreleaser release
 
-.PHONY: build release
+.PHONY: build release test

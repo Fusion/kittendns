@@ -94,7 +94,7 @@ func singleLifeCycle() error {
 
 	if app.Config.Settings.AutoReload {
 		log.Println("Watching config for changes.")
-		watchable := []string{"config.toml", "secret.toml"}
+		watchable := append([]string{"config.toml", "secret.toml"}, app.Config.Monitor...)
 		for _, path := range watchable {
 			if err := watcher.Add(path); err != nil {
 				// NOTE: be careful... we may the one modifying dynamic.toml!

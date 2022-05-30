@@ -28,6 +28,8 @@ var (
 	instance *exampleHandler
 )
 
+func main() {} // Keeping toolchain happy
+
 func ExamplePreHandler(arguments []string) plugins.PreHandler {
 	if instance == nil {
 		instance = &exampleHandler{}

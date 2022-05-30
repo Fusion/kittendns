@@ -50,6 +50,11 @@ func Load(cfg *config.Config) *Plugins {
 			plugins.PostHandler = append(plugins.PostHandler, postHandler)
 			log.Println("Loaded post handler:", pluginDef.PostHandler)
 		}
+		if pluginDef.Monitor != nil {
+			for _, fileToMonitor := range pluginDef.Monitor {
+				cfg.Monitor = append(cfg.Monitor, fileToMonitor)
+			}
+		}
 	}
 	return plugins
 }
