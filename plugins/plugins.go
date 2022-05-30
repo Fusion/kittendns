@@ -29,26 +29,31 @@ func Load(cfg *config.Config) *Plugins {
 			if err != nil {
 				log.Fatal(fmt.Sprintf("Unable to find pre handler ('%s') in loaded helper plugin", pluginDef.PreHandler))
 			}
-			initFunc, ok := nph.(func() PreHandler)
+			initFunc, ok := nph.(func([]string) PreHandler)
 			if !ok {
 				log.Fatal("Loaded helper plugin lacks a proper pre handler function")
 			}
-			preHandler := initFunc()
+			preHandler := initFunc(pluginDef.Arguments)
 			plugins.PreHandler = append(plugins.PreHandler, preHandler)
-			fmt.Println("Loaded pre handler:", pluginDef.PreHandler)
+			log.Println("Loaded pre handler:", pluginDef.PreHandler)
 		}
 		if pluginDef.PostHandler != "" {
 			nph, err := plug.Lookup(pluginDef.PostHandler)
 			if err != nil {
 				log.Fatal(fmt.Sprintf("Unable to find post handler ('%s') in loaded helper plugin", pluginDef.PostHandler))
 			}
-			initFunc, ok := nph.(func() PostHandler)
+			initFunc, ok := nph.(func([]string) PostHandler)
 			if !ok {
 				log.Fatal("Loaded helper plugin lacks a proper post handler function")
 			}
-			postHandler := initFunc()
+			postHandler := initFunc(pluginDef.Arguments)
 			plugins.PostHandler = append(plugins.PostHandler, postHandler)
-			fmt.Println("Loaded post handler:", pluginDef.PostHandler)
+			log.Println("Loaded post handler:", pluginDef.PostHandler)
+		}
+		if pluginDef.Monitor != nil {
+			for _, fileToMonitor := range pluginDef.Monitor {
+				cfg.Monitor = append(cfg.Monitor, fileToMonitor)
+			}
 		}
 	}
 	return plugins

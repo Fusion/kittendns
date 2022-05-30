@@ -99,6 +99,8 @@ type Plugin struct {
 	Path        string
 	PreHandler  string
 	PostHandler string
+	Arguments   []string
+	Monitor     []string
 }
 
 type Config struct {
@@ -107,6 +109,7 @@ type Config struct {
 	Records  map[string]Record
 	Rule     []Rule
 	Plugin   []Plugin
+	Monitor  []string
 	Secret   secret.Secret
 }
 

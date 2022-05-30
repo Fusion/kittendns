@@ -3,8 +3,9 @@ before:
     - go mod tidy
     - go generate ./...
 builds:
-  - env:
-      - CGO_ENABLED=0
+  - id: kittendns
+    env:
+      - CGO_ENABLED=1
     goos:
       - linux
       - windows
@@ -14,8 +15,52 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.Version={{.Version}}
-    gcflags:
-      - "all=-trimpath={{.Env.GOPATH}}"
+    hooks:
+      post:
+        - mkdir -p bin
+        - cp {{.Path}} bin/
+  - id: plugin_example
+    binary: example.so
+    dir: plugins/example
+    main: example.go
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -buildmode=plugin 
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+    hooks:
+      post:
+        - mkdir -p bin
+        - cp {{.Path}} bin/
+  - id: plugin_jsscript
+    binary: jsscript.so
+    dir: plugins/jsscript
+    main: jsscript.go
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -buildmode=plugin 
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+    hooks:
+      post:
+        - mkdir -p bin
+        - cp {{.Path}} bin/
 archives:
   - replacements:
       darwin: Darwin

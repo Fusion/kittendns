@@ -28,6 +28,16 @@ action = "drop"
 condition = "not (remoteip startsWith '192.168.1')"
 action = "inspect"
 
+# Plugins (you can chain them... but be careful)
+
+[[plugin]]
+enabled = true
+path = "bin/jsscript.so"
+prehandler = "JsScriptPreHandler"
+posthandler = "JsScriptPostHandler"
+arguments = ["plugins/jsscript/example.js"]
+monitor = ["plugins/jsscript/example.js"]
+
 # Zone definitions
 
 [[zone]]
