@@ -99,6 +99,7 @@ type Plugin struct {
 	Path        string
 	PreHandler  string
 	PostHandler string
+	Arguments   []string
 }
 
 type Config struct {

@@ -16,6 +16,7 @@ import (
 	"github.com/antonmedv/expr"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/fsnotify/fsnotify"
+	"github.com/fusion/kittendns/builders"
 	"github.com/fusion/kittendns/cache"
 	"github.com/fusion/kittendns/config"
 	"github.com/fusion/kittendns/plugins"
@@ -476,7 +477,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		for _, zone := range app.Config.Zone {
 			if zone.Origin == lowerName {
-				soaanswer := newSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
+				soaanswer := builders.NewSOA(zone.Origin, zone.Auth.Ns, zone.Auth.Email, zone.Auth.Serial)
 				answers = []dns.RR{soaanswer}
 				break
 			}
@@ -488,7 +489,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		record, ok := (*app.Records)[dns.TypeSRV][lowerName]
 		if ok {
-			srv := newSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
+			srv := builders.NewSRV(q.Name, record.Target, record.Port, record.Priority, record.Weight, record.TTL)
 			answers = []dns.RR{srv}
 		}
 
@@ -498,7 +499,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		record, ok := (*app.Records)[dns.TypeTXT][lowerName]
 		if ok {
-			txt := newTXT(q.Name, record.Target, record.TTL)
+			txt := builders.NewTXT(q.Name, record.Target, record.TTL)
 			answers = []dns.RR{txt}
 		}
 
@@ -509,7 +510,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		mailers, ok := (*app.Mailers)[lowerName]
 		if ok {
 			for _, mailer := range mailers {
-				mx := newMX(q.Name, mailer.Host, mailer.Priority, mailer.TTL)
+				mx := builders.NewMX(q.Name, mailer.Host, mailer.Priority, mailer.TTL)
 				answers = append(answers, mx)
 			}
 		}
@@ -524,7 +525,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				if app.Config.Settings.DebugLevel > 0 {
 					log.Printf("CNAME Query for %s\n", q.Name)
 				}
-				alias := newCNAME(q.Name, record.Aliased, record.TTL)
+				alias := builders.NewCNAME(q.Name, record.Aliased, record.TTL)
 				answers = []dns.RR{alias}
 			} else if (record.Type == dns.TypeA || record.Type == dns.TypeAAAA) && q.Qtype != dns.TypeCNAME {
 				if app.Config.Settings.DebugLevel > 0 {
@@ -564,7 +565,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 					(*app.Resolver.entries)[record.Type][lowerName] = resolver
 					app.Resolver.RWMutex.Unlock()
 
-					rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
+					rr, err := builders.NewRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
 					if err == nil {
 						answers = []dns.RR{rr}
 					}
@@ -577,7 +578,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 						recordIPs = &record.IPv4s
 					}
 					for _, ip := range *recordIPs {
-						rr, err := newRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
+						rr, err := builders.NewRR(q.Qtype, q.Name, record.Host, ip, record.TTL)
 						if err == nil {
 							answers = append(answers, rr)
 						}
@@ -593,7 +594,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 	}
 
 	if record.Auth != noAuth {
-		soa = newSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
+		soa = builders.NewSOA(record.Origin, record.Auth.Ns, record.Auth.Email, record.Auth.Serial)
 	}
 
 	// To the rule engine
@@ -659,7 +660,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 		}
 		if strings.HasPrefix(action, "rewrite ") {
 			shadowIP := unquote(strings.TrimPrefix(action, "rewrite "))
-			rr, _ := newRR(dns.TypeA, q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL and type
+			rr, _ := builders.NewRR(dns.TypeA, q.Name, q.Name, shadowIP, 3600) // TODO Fix TTL and type
 			m.Answer = append(m.Answer, rr)
 			continue
 		}
@@ -806,89 +807,6 @@ func (app *App) parseRules(remoteip string, host string, answer dns.RR) string {
 		log.Println("No rule applies")
 	}
 	return ""
-}
-
-func newRR(recordType uint16, query string, host string, ip string, ttl uint32) (dns.RR, error) {
-	textType := "A"
-	if recordType == dns.TypeAAAA {
-		textType = "AAAA"
-	}
-	rr, err := dns.NewRR(
-		fmt.Sprintf(
-			"%s %d %s %s",
-			query,
-			ttl,
-			textType,
-			ip))
-	return rr, err
-}
-
-func newCNAME(query string, target string, ttl uint32) dns.RR {
-	alias := new(dns.CNAME)
-	alias.Hdr = dns.RR_Header{
-		Name:   query,
-		Rrtype: dns.TypeCNAME,
-		Class:  dns.ClassINET,
-		Ttl:    ttl}
-	alias.Target = target
-	return alias
-}
-
-func newSRV(query string, target string, port uint16, priority uint16, weight uint16, ttl uint32) dns.RR {
-	srv := new(dns.SRV)
-	srv.Hdr = dns.RR_Header{
-		Name:     query,
-		Rrtype:   dns.TypeSRV,
-		Class:    dns.ClassINET,
-		Ttl:      ttl,
-		Rdlength: 0}
-	srv.Port = port
-	srv.Priority = priority
-	srv.Weight = weight
-	srv.Target = target
-	return srv
-}
-
-func newTXT(query string, target string, ttl uint32) dns.RR {
-	srv := new(dns.TXT)
-	srv.Hdr = dns.RR_Header{
-		Name:     query,
-		Rrtype:   dns.TypeTXT,
-		Class:    dns.ClassINET,
-		Ttl:      ttl,
-		Rdlength: 0}
-	srv.Txt = []string{target}
-	return srv
-}
-
-func newMX(query string, host string, priority uint16, ttl uint32) dns.RR {
-	mailer := new(dns.MX)
-	mailer.Hdr = dns.RR_Header{
-		Name:   query,
-		Rrtype: dns.TypeMX,
-		Class:  dns.ClassINET,
-		Ttl:    ttl}
-	mailer.Mx = host
-	mailer.Preference = priority
-	return mailer
-}
-
-func newSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
-	soa := new(dns.SOA)
-	soa.Hdr = dns.RR_Header{
-		Name:     origin,
-		Rrtype:   dns.TypeSOA,
-		Class:    dns.ClassINET,
-		Ttl:      14400,
-		Rdlength: 0}
-	soa.Ns = fmt.Sprintf("%s.", ns)
-	soa.Mbox = fmt.Sprintf("%s.", mbox)
-	soa.Serial = serial
-	soa.Refresh = 86400
-	soa.Retry = 7200
-	soa.Expire = (86400 + 7200*2)
-	soa.Minttl = 7200
-	return soa
 }
 
 func unquote(str string) string {

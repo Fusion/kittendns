@@ -3,3 +3,4 @@ secret.toml
 thirdparty
 kittendns
 dist/
+bin/

@@ -28,14 +28,14 @@ var (
 	instance *exampleHandler
 )
 
-func ExamplePreHandler() plugins.PreHandler {
+func ExamplePreHandler(arguments []string) plugins.PreHandler {
 	if instance == nil {
 		instance = &exampleHandler{}
 	}
 	return instance
 }
 
-func ExamplePostHandler() plugins.PostHandler {
+func ExamplePostHandler(arguments []string) plugins.PostHandler {
 	if instance == nil {
 		instance = &exampleHandler{}
 	}
