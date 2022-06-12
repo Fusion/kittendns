@@ -5,8 +5,11 @@ import (
 	"os"
 
 	"github.com/dop251/goja"
+	"github.com/dop251/goja_nodejs/console"
+	"github.com/dop251/goja_nodejs/require"
 	"github.com/fusion/kittendns/builders"
 	"github.com/fusion/kittendns/plugins"
+	"github.com/fusion/kittendns/plugins/jsscript/fetch"
 	"github.com/miekg/dns"
 )
 
@@ -43,6 +46,11 @@ func thisinit(arguments []string) {
 			log.Fatal("Unable to load script:", err)
 		}
 		vm := goja.New()
+		// NodeJS-type extensions
+		registry := new(require.Registry)
+		registry.Enable(vm)
+		console.Enable(vm)
+		fetch.Enable(vm)
 		instance = &jsscriptHandler{vm: vm}
 		_, err = vm.RunString(string(raw))
 		if err != nil {
