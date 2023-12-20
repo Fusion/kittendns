@@ -1,5 +1,6 @@
 config.toml
 secret.toml
+plugins/jsscript/secrets.js
 thirdparty
 kittendns
 sourceme

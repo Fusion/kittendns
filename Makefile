@@ -11,10 +11,10 @@ test:
 	@go test
 
 linuxamd64:
-	@mkdir -p dist/$@ && GOOS=linux GOARCH=amd64 go build ${TRIM_FLAGS} -ldflags "${BUILD_VARS}" -o dist/$@/kittendns main.go
+	@mkdir -p dist/$@ && GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build ${TRIM_FLAGS} -ldflags "${BUILD_VARS}" -o dist/$@/kittendns main.go
 
 linuxarm64:
-	@mkdir -p dist/$@ && GOOS=linux GOARCH=arm64 go build ${TRIM_FLAGS} -ldflags "${BUILD_VARS}" -o dist/$@/kittendns main.go
+	@mkdir -p dist/$@ && GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build ${TRIM_FLAGS} -ldflags "${BUILD_VARS}" -o dist/$@/kittendns main.go
 
 darwinamd64:
 	@mkdir -p dist/$@ && GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build ${TRIM_FLAGS} -ldflags "${BUILD_VARS}" -o dist/$@/kittendns main.go

@@ -67,7 +67,7 @@ func thisinit(arguments []string) {
 	}
 }
 
-func (h *jsscriptHandler) ProcessQuery(p plugins.PreOrPost, m *dns.Msg, q *dns.Question) (*plugins.Update, error) {
+func (h *jsscriptHandler) ProcessQuery(p plugins.PreOrPost, ip string, m *dns.Msg, q *dns.Question) (*plugins.Update, error) {
 	var preOrPost uint16
 	var existingAnswers goja.Value
 	if p == plugins.Pre {
@@ -81,6 +81,7 @@ func (h *jsscriptHandler) ProcessQuery(p plugins.PreOrPost, m *dns.Msg, q *dns.Q
 	raw, err := (*h.mainFn)(
 		goja.Undefined(),
 		h.vm.ToValue(preOrPost),
+		h.vm.ToValue(ip),
 		existingAnswers,
 		h.vm.ToValue(q.Qtype),
 		h.vm.ToValue(q.Name))

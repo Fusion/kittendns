@@ -1,10 +1,10 @@
-function main(preOrPost, answers, type, name) {
+function main(preOrPost, ip, answers, type, name) {
     if (preOrPost == pre) 
-        return prefn(type, name);
+        return prefn(ip, type, name);
     return postfn(answers, type, name);
 }
 
-function prefn(type, name) {
+function prefn(ip, type, name) {
     // Pulling a TXT record from the magician's hat.
     if (type == typeTXT && name == "magic.example.com.") {
         return {"action": Reply, "type": type, "TTL": 60, "RR": [{"target": "this is a magic record"}], "Done": true};
@@ -13,7 +13,7 @@ function prefn(type, name) {
     if (type == typeA && name == "plugintest.example.com.") {
         return {"action": Question, "question": {"type": type, "name": "test.example.com."}};
     }
-    return toy_dns_fun(type, name);
+    return toy_dns_fun(ip, type, name);
 }
 
 function postfn(answers, type, name) {
@@ -30,15 +30,19 @@ function postfn(answers, type, name) {
     return {}
 }
 
-function toy_dns_fun(type, name) {
-    // Replace with "False" to play with toy dns features
+function toy_dns_fun(ip, type, name) {
+    // Replace with "false" to play with toy dns features
     if (false)
         return {}
     var m = require("./plugins/jsscript/extended_example.js");
+    var s = require("./plugins/jsscript/secrets.js");
     if (type == typeA && name == "nine.example.com.") {
         console.log("Plugin information: Querying nine responder");
         var res = m.nineResponder();
         return {"action": Reply, "type": type, "TTL": 60, "RR": [{"host": "nine.example.com", "ip": res}], "Stop": true};
+    }
+    if (type == typeTXT && name == "whereami.example.com.") {
+        return m.geoResponder(ip, s);
     }
     if (name.endsWith(".time.example.com.")) {
         var bits = name.split(".", 2);

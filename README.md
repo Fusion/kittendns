@@ -113,6 +113,11 @@ and another entry for its AAAA (v6) counterpart. This is wastful!
 A: You are correct. However, I should not store both entries using the same key because they can both be capitalized differently.
 And, little known fact, capitalization in DNS can be a security feature.
 
+Q: What's that about capitalization?
+
+A: KittenDNS makes sure that the response to a query returns the host capitalized exactly as it was in the query.
+This is a protection scheme against DNS poisoning, known as the '0x20' trick.
+
 # Misc
 
 <div>Logo created by <a href="https://www.designevo.com/" title="Free Online Logo Maker">DesignEvo logo maker</a></div>

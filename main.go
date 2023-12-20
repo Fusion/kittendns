@@ -366,9 +366,15 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 		}
 	}
 
+	remoteip := ""
+	remoteAddr := ctx.Value("remoteaddr")
+	if remoteAddr != nil {
+		remoteip = strings.Split(remoteAddr.(string), ":")[0]
+	}
+
 	switch r.Opcode {
 	case dns.OpcodeQuery:
-		app.parseQuery(ctx, m)
+		app.parseQuery(ctx, remoteip, m)
 	case dns.OpcodeUpdate:
 		m.Ns = r.Ns
 		app.parseUpdate(ctx, m)
@@ -377,9 +383,9 @@ func (app *App) handleDnsRequest(ctx context.Context, w dns.ResponseWriter, r *d
 	w.WriteMsg(m)
 }
 
-func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
+func (app *App) parseQuery(ctx context.Context, remoteip string, m *dns.Msg) {
 	for _, q := range m.Question {
-		done, err := app.processPrePlugins(ctx, m, &q)
+		done, err := app.processPrePlugins(ctx, remoteip, m, &q)
 		if done {
 			continue
 		}
@@ -397,22 +403,22 @@ func (app *App) parseQuery(ctx context.Context, m *dns.Msg) {
 			}
 		}
 		if authoritative {
-			app.authoritativeSearch(ctx, m, q)
+			app.authoritativeSearch(ctx, remoteip, m, q)
 		} else {
 			// TODO Check if RecursionRequested
-			app.recursiveSearch(ctx, m, q)
+			app.recursiveSearch(ctx, remoteip, m, q)
 		}
-		err = app.processPostPlugins(ctx, m, &q)
+		err = app.processPostPlugins(ctx, remoteip, m, &q)
 		if err != nil {
 			break
 		}
 	}
 }
 
-func (app *App) processPrePlugins(ctx context.Context, m *dns.Msg, q *dns.Question) (bool, error) {
+func (app *App) processPrePlugins(ctx context.Context, remoteip string, m *dns.Msg, q *dns.Question) (bool, error) {
 	done := false
 	for _, plugin := range app.Plugins.PreHandler {
-		update, err := plugin.ProcessQuery(plugins.Pre, m, q)
+		update, err := plugin.ProcessQuery(plugins.Pre, remoteip, m, q)
 		if err != nil {
 			return false, err
 		}
@@ -433,9 +439,9 @@ func (app *App) processPrePlugins(ctx context.Context, m *dns.Msg, q *dns.Questi
 	return done, nil
 }
 
-func (app *App) processPostPlugins(ctx context.Context, m *dns.Msg, q *dns.Question) error {
+func (app *App) processPostPlugins(ctx context.Context, remoteip string, m *dns.Msg, q *dns.Question) error {
 	for _, plugin := range app.Plugins.PostHandler {
-		update, err := plugin.ProcessQuery(plugins.Post, m, q)
+		update, err := plugin.ProcessQuery(plugins.Post, remoteip, m, q)
 		if err != nil {
 			return err
 		}
@@ -459,7 +465,7 @@ func (app *App) parseUpdate(ctx context.Context, m *dns.Msg) {
 	}
 }
 
-func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
+func (app *App) authoritativeSearch(ctx context.Context, remoteip string, m *dns.Msg, q dns.Question) {
 	var noAuth config.Auth
 
 	var answers []dns.RR
@@ -612,7 +618,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				// If this is a CNAME, keep digging until we find an A record
 				if answer.Header().Rrtype == dns.TypeCNAME {
 					q.Name = answer.(*dns.CNAME).Target
-					app.authoritativeSearch(ctx, m, q)
+					app.authoritativeSearch(ctx, remoteip, m, q)
 				}
 			}
 
@@ -621,12 +627,6 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 			}
 		}
 		return
-	}
-
-	remoteip := ""
-	remoteAddr := ctx.Value("remoteaddr")
-	if remoteAddr != nil {
-		remoteip = strings.Split(remoteAddr.(string), ":")[0]
 	}
 
 	for _, answer := range answers {
@@ -641,7 +641,7 @@ func (app *App) authoritativeSearch(ctx context.Context, m *dns.Msg, q dns.Quest
 				// If this is a CNAME, keep digging until we find an A record
 				if answer.Header().Rrtype == dns.TypeCNAME {
 					q.Name = answer.(*dns.CNAME).Target
-					app.authoritativeSearch(ctx, m, q)
+					app.authoritativeSearch(ctx, remoteip, m, q)
 				}
 			}
 
@@ -721,7 +721,7 @@ func (app *App) authoritativeUpdate(ctx context.Context, m *dns.Msg, n dns.RR, e
 	*/
 }
 
-func (app *App) recursiveSearch(ctx context.Context, m *dns.Msg, q dns.Question) {
+func (app *App) recursiveSearch(ctx context.Context, remoteip string, m *dns.Msg, q dns.Question) {
 	if app.Config.Settings.Parent.Address == "" {
 		if app.Config.Settings.DebugLevel > 2 {
 			log.Println("Not recursing as no parent was defined.")

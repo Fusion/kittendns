@@ -22,7 +22,7 @@ const (
 )
 
 type PreHandler interface {
-	ProcessQuery(p PreOrPost, m *dns.Msg, q *dns.Question) (*Update, error)
+	ProcessQuery(p PreOrPost, ip string, m *dns.Msg, q *dns.Question) (*Update, error)
 }
 
 type PreParam struct {
@@ -32,7 +32,7 @@ type PreParam struct {
 }
 
 type PostHandler interface {
-	ProcessQuery(p PreOrPost, m *dns.Msg, q *dns.Question) (*Update, error)
+	ProcessQuery(p PreOrPost, ip string, m *dns.Msg, q *dns.Question) (*Update, error)
 }
 
 type PostParam struct {
