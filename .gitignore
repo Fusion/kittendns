@@ -7,3 +7,4 @@ sourceme
 dist/
 bin/
 .vscode/
+id_rsa*
