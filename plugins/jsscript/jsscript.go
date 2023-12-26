@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"errors"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/console"
@@ -14,13 +15,37 @@ import (
 )
 
 type jsscriptHandler struct {
+	busy	bool
 	vm     *goja.Runtime
 	mainFn *goja.Callable
 	script string
 }
 
+type TransactionType uint8
+
+const (
+	TransactionBook TransactionType = iota
+	TransactionRelease
+)
+
+type response struct {
+	handler *jsscriptHandler
+	idx int
+}
+
+type transact struct {
+	ttype    TransactionType
+	idx int
+	reply chan response
+}
+
+type jsscriptHandlerHolder struct {
+	handlers []*jsscriptHandler
+	transactor chan *transact
+}
+
 var (
-	instance *jsscriptHandler
+	instance *jsscriptHandlerHolder
 )
 
 func main() {} // Keeping toolchain happy
@@ -45,25 +70,59 @@ func thisinit(arguments []string) {
 		if err != nil {
 			log.Fatal("Unable to load script:", err)
 		}
-		vm := goja.New()
-		// NodeJS-type extensions
-		registry := new(require.Registry)
-		registry.Enable(vm)
-		console.Enable(vm)
-		fetch.Enable(vm)
-		instance = &jsscriptHandler{vm: vm}
-		_, err = vm.RunString(string(raw))
-		if err != nil {
-			log.Fatal("Unable to understand script:", err)
+		handlers := []*jsscriptHandler{}
+		for vmidx := 0; vmidx < 16; vmidx++ {
+			vm := goja.New()
+			// NodeJS-type extensions
+			registry := new(require.Registry)
+			registry.Enable(vm)
+			console.Enable(vm)
+			fetch.Enable(vm)
+			handler := &jsscriptHandler{vm: vm}
+			_, err = vm.RunString(string(raw))
+			if err != nil {
+				log.Fatal("Unable to understand script:", err)
+			}
+			mainFn, ok := goja.AssertFunction(vm.Get("main"))
+			if !ok {
+				log.Fatal("Unable to find main function in script:", err)
+			}
+			handler.mainFn = &mainFn
+			vm.RunString("const pre=0;const post=1;")
+			vm.RunString("const Noop=0;const Question=1;const Reply=2;const Rewrite=3;const Deny=4;")
+			vm.RunString("const typeA=1;const typeNS=2;const typeCNAME=5;const typeSOA=6;const typePTR=12;const typeMX=15;const typeTXT=16;const typeAAAA=28;const typeSRV=33;")
+			handlers = append(handlers, handler)
 		}
-		mainFn, ok := goja.AssertFunction(vm.Get("main"))
-		if !ok {
-			log.Fatal("Unable to find main function in script:", err)
-		}
-		instance.mainFn = &mainFn
-		vm.RunString("const pre=0;const post=1;")
-		vm.RunString("const Noop=0;const Question=1;const Reply=2;const Rewrite=3;const Deny=4;")
-		vm.RunString("const typeA=1;const typeNS=2;const typeCNAME=5;const typeSOA=6;const typePTR=12;const typeMX=15;const typeTXT=16;const typeAAAA=28;const typeSRV=33;")
+		instance = &jsscriptHandlerHolder{handlers: handlers}
+
+		instance.transactor = make(chan *transact)
+		go func() {
+			for {
+				select {
+				case transaction := <-instance.transactor:
+					switch transaction.ttype {
+					case TransactionBook:
+						found := false
+						for vmidx := 0; vmidx < 16; vmidx++ {
+							if !instance.handlers[vmidx].busy {
+								found = true
+								instance.handlers[vmidx].busy = true
+								transaction.reply <- response{
+									handler: instance.handlers[vmidx],
+									idx: vmidx}
+								break
+							}
+						}
+						if !found {
+							transaction.reply <- response{idx: -1}
+						}
+					case TransactionRelease:
+						instance.handlers[transaction.idx].busy = false
+						transaction.reply <- response{}
+					}
+				}
+			}
+		}()
 	}
 }
 
@@ -142,6 +201,25 @@ func (h *jsscriptHandler) ProcessQuery(p plugins.PreOrPost, ip string, m *dns.Ms
 			nil
 	}
 	return nil, nil
+}
+
+func (h *jsscriptHandlerHolder) ProcessQuery(p plugins.PreOrPost, ip string, m *dns.Msg, q *dns.Question) (*plugins.Update, error) {
+	tr := &transact{ttype: TransactionBook, reply: make(chan response)}
+	h.transactor <- tr
+	reply := <-tr.reply
+	if reply.idx == -1 {
+		return nil, errors.New("unable to find a free javascript interpreter")
+	}
+	handler := reply.handler
+	idx := reply.idx
+
+	update, err := handler.ProcessQuery(p, ip, m, q)
+
+	tr = &transact{ttype: TransactionRelease, idx: idx, reply: make(chan response)}
+	h.transactor <- tr
+	<-tr.reply
+
+	return update, err
 }
 
 func buildReply(answers []dns.RR, name string, replyType uint16, replyTTL uint32, mrr map[string]interface{}) []dns.RR {
