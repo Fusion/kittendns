@@ -566,7 +566,6 @@ func (app *App) authoritativeSearch(ctx context.Context, remoteip string, m *dns
 			record, ok = (*app.Records)[dns.TypeCNAME][lowerName]
 		}
 		if !ok {
-			log.Println(":LAST HOPE FOR " + lowerName)
 			segments := strings.SplitN(lowerName, ".", 2)
 			if len(segments) == 2 {
 				record, ok = (*app.Records)[dns.TypeA][fmt.Sprintf("*.%s", segments[1])]
