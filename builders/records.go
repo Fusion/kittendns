@@ -71,6 +71,17 @@ func NewMX(query string, host string, priority uint16, ttl uint32) dns.RR {
 	return mailer
 }
 
+func NewNS(query string, host string, ttl uint32) dns.RR {
+	nameserver := new(dns.NS)
+	nameserver.Hdr = dns.RR_Header{
+		Name:   query,
+		Rrtype: dns.TypeNS,
+		Class:  dns.ClassINET,
+		Ttl:    ttl}
+	nameserver.Ns = host
+	return nameserver
+}
+
 func NewSOA(origin string, ns string, mbox string, serial uint32) dns.RR {
 	soa := new(dns.SOA)
 	soa.Hdr = dns.RR_Header{

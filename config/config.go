@@ -48,6 +48,12 @@ type Mailer struct {
 	NoMailer bool
 }
 
+type NameServer struct {
+	Host   string
+	Target string
+	TTL    uint32
+}
+
 type Record struct {
 	Type uint16
 
@@ -82,11 +88,12 @@ type Record struct {
 }
 
 type Zone struct {
-	Origin string
-	TTL    uint32
-	Auth   Auth
-	Record []Record
-	Mailer []Mailer
+	Origin     string
+	TTL        uint32
+	Auth       Auth
+	Record     []Record
+	Mailer     []Mailer
+	NameServer []NameServer
 }
 
 type Rule struct {
