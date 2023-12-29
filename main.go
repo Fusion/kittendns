@@ -32,12 +32,13 @@ type Resolver struct {
 	entries *map[uint16]map[string]ResolverEntry
 }
 type App struct {
-	Config   *config.Config
-	Plugins  *plugins.Plugins
-	Records  *map[uint16]map[string]config.Record
-	Mailers  *map[string][]config.Mailer
-	Resolver *Resolver
-	Cache    *cache.RcCache
+	Config      *config.Config
+	Plugins     *plugins.Plugins
+	Records     *map[uint16]map[string]config.Record
+	Mailers     *map[string][]config.Mailer
+	NameServers *map[string][]config.NameServer
+	Resolver    *Resolver
+	Cache       *cache.RcCache
 }
 
 func main() {
@@ -53,6 +54,7 @@ func singleLifeCycle() error {
 
 	app.Config = config.GetConfig()
 	app.Plugins = plugins.Load(app.Config)
+	app.NameServers = flattenNameServers(app.Config)
 	app.Mailers = flattenMailers(app.Config)
 	app.Records = flattenRecords(app.Config)
 	app.Resolver = &Resolver{entries: &map[uint16]map[string]ResolverEntry{
@@ -160,6 +162,31 @@ func moreLenientAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 		return dns.MsgReject
 	}
 	return dns.MsgAccept
+}
+
+func flattenNameServers(cfg *config.Config) *map[string][]config.NameServer {
+	nameservers := map[string][]config.NameServer{}
+	for _, zone := range cfg.Zone {
+		if zone.NameServer != nil {
+			for _, nameserver := range zone.NameServer {
+				if nameserver.TTL == 0 {
+					nameserver.TTL = zone.TTL
+				}
+				nameserver.Host = canonicalize(zone.Origin, nameserver.Host)
+				var zonename string
+				if nameserver.Target != "" {
+					zonename = fmt.Sprintf("%s.%s", nameserver.Target, zone.Origin)
+				} else {
+					zonename = zone.Origin
+				}
+				if _, ok := nameservers[zonename]; !ok {
+					nameservers[zonename] = []config.NameServer{}
+				}
+				nameservers[zonename] = append(nameservers[zonename], nameserver)
+			}
+		}
+	}
+	return &nameservers
 }
 
 func flattenMailers(cfg *config.Config) *map[string][]config.Mailer {
@@ -521,10 +548,29 @@ func (app *App) authoritativeSearch(ctx context.Context, remoteip string, m *dns
 			}
 		}
 
+	case dns.TypeNS:
+		if app.Config.Settings.DebugLevel > 0 {
+			log.Printf("NS Query %s\n", q.Name)
+		}
+		nameservers, ok := (*app.NameServers)[lowerName]
+		if ok {
+			for _, nameserver := range nameservers {
+				ns := builders.NewNS(q.Name, nameserver.Host, nameserver.TTL)
+				answers = append(answers, ns)
+			}
+		}
+
 	case dns.TypeAAAA, dns.TypeA, dns.TypeCNAME:
 		record, ok = (*app.Records)[dns.TypeA][lowerName]
 		if !ok {
 			record, ok = (*app.Records)[dns.TypeCNAME][lowerName]
+		}
+		if !ok {
+			log.Println(":LAST HOPE FOR " + lowerName)
+			segments := strings.SplitN(lowerName, ".", 2)
+			if len(segments) == 2 {
+				record, ok = (*app.Records)[dns.TypeA][fmt.Sprintf("*.%s", segments[1])]
+			}
 		}
 		if ok {
 			if record.Type == dns.TypeCNAME {

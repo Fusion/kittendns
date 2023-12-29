@@ -1,9 +1,9 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"os"
-	"errors"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/console"
@@ -15,7 +15,7 @@ import (
 )
 
 type jsscriptHandler struct {
-	busy	bool
+	busy   bool
 	vm     *goja.Runtime
 	mainFn *goja.Callable
 	script string
@@ -30,17 +30,17 @@ const (
 
 type response struct {
 	handler *jsscriptHandler
-	idx int
+	idx     int
 }
 
 type transact struct {
-	ttype    TransactionType
-	idx int
+	ttype TransactionType
+	idx   int
 	reply chan response
 }
 
 type jsscriptHandlerHolder struct {
-	handlers []*jsscriptHandler
+	handlers   []*jsscriptHandler
 	transactor chan *transact
 }
 
@@ -109,7 +109,7 @@ func thisinit(arguments []string) {
 								instance.handlers[vmidx].busy = true
 								transaction.reply <- response{
 									handler: instance.handlers[vmidx],
-									idx: vmidx}
+									idx:     vmidx}
 								break
 							}
 						}
