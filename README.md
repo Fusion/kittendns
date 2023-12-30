@@ -1,17 +1,38 @@
-![](assets/kittendns.png)
+<img src="assets/kittendns.png" align="right"/>
+
 # What is this?
 
 A toy DNS for hobbyists and worried people.
 
-Several goals:
+Mission Statement:
 
-- Rule engine to rewrite/deny queries (implemented)
-- Dirt simple to configure (toml syntax)
 - No fat. Fast.
 
-# Configuration
+Features:
 
+- Really easy to configure (toml syntax)
+- Rule engine to rewrite/deny queries
+- Plugins support
+
+But also:
+
+- RFC2136 and LetsEncrypt compatibility, use as a DNS endpoint to obtain certificates
+- Configuration auto-update
+
+
+# Configuration, Documentation
+
+<table>
+<tr>
+<td>
+    
 Take a look at the content of the `config.toml.template` file. Copy it to `config.toml` and run.
+
+Read the [CONCISE DOCUMENTATION](https://github.com/Fusion/kittendns/wiki)
+
+</td>
+</tr>
+</table>
 
 # RFC2136 and LetsEncrypt compatibility
 
@@ -108,7 +129,7 @@ Rate Limiter: should be limiting some misbehaving clients. Problem: how do we id
 # FAQ
 
 Q: I noticed that you are storing similar records in separate structures. For instance, there is one entry for a A (v4) record,
-and another entry for its AAAA (v6) counterpart. This is wastful!
+and another entry for its AAAA (v6) counterpart. This is wasteful!
 
 A: You are correct. However, I should not store both entries using the same key because they can both be capitalized differently.
 And, little known fact, capitalization in DNS can be a security feature.
