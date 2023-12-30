@@ -34,21 +34,6 @@ Read the [CONCISE DOCUMENTATION](https://github.com/Fusion/kittendns/wiki)
 </tr>
 </table>
 
-# RFC2136 and LetsEncrypt compatibility
-
-It is possible to run e.g. `certbot` and use this software to automatically provide the answers that LetsEncrypt needs to validate that it can deliver a certificate for a given domain:
-
-```
-certbot certonly --test-cert -m you@example.com \
-    --config-dir . --work-dir . --logs-dir . \
-    --dns-rfc2136 \
-    --dns-rfc2136-propagation-seconds 5 \
-    --dns-rfc2136-credentials=secrets.ini \
-    -d yourhost.example.com
-```
-
-Note: remove `--test-cert` to get a production certificate.
-
 # DNS Synchronization
 
 There is currently no notion of primary and secondary DNS. All your DNS instances are equal. It would be fairly easy to implement `IXFR/AXFR` but unless it becomes a mandatory feature, this seems to go against my "no fat/easy to configure" goals. With this being said, you could use something like [Syncthing](https://syncthing.net/) to keep `config.toml` current.
@@ -59,11 +44,11 @@ In the `github.com/miekg/dns` repository, there was a pull request allowing code
 
 # Performance testing
 
-The tests below are performed using authoritative (local) records as my main goal is to offer a server that can survive a brutal assault serving cloud endpoints. Performing the same test against recursed hosts offers similar performance, simply because I am not querying 1M different hosts and the server efficiently* caches responses (while respecting their TTL)
+The tests below are performed using authoritative (local) records as my main goal is to offer a server that can survive a brutal assault serving cloud endpoints. Performing the same test against recursed hosts offers similar performance, simply because I am not querying 1M different hosts and the server efficiently`*` caches responses (while respecting their TTL)
 
 These tests are run locally on a 2020 Macbook M1 Pro and jMeter is using as much CPU as it dares to, while kittendns doesn't even appear in my top output.
 
-(*) dumbly
+`*` dumbly
 
 ## jMeter stress testing
 
