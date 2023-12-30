@@ -6,9 +6,9 @@
     
 <p align="center">
 	<strong>
-		📖&nbsp;<a href="/Fusion/kittendns/wiki)">Documentation</a>
+		📖&nbsp;<a href="https://github.com/Fusion/kittendns/wiki">Documentation</a>
 		•
-		<a href="/Fusion/kittendns/releases">Releases</a>&nbsp;🏷️
+		<a href="https://github.com/Fusion/kittendns/releases">Releases</a>&nbsp;🏷️
 	</strong>
 </p>
 
