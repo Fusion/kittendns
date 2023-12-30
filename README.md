@@ -1,3 +1,23 @@
+<div align="center">
+    
+<table>
+<tr>
+<td>
+    
+<p align="center">
+	<strong>
+		📖&nbsp;<a href="/Fusion/kittendns/wiki)">Documentation</a>
+		•
+		<a href="/Fusion/kittendns/releases">Releases</a>&nbsp;🏷️
+	</strong>
+</p>
+
+</td>
+</tr>
+</table>
+
+</div>
+
 <img src="assets/kittendns.png" align="right"/>
 
 # What is this?
@@ -22,17 +42,13 @@ But also:
 
 # Configuration, Documentation
 
-<table>
-<tr>
-<td>
+
     
 Take a look at the content of the `config.toml.template` file. Copy it to `config.toml` and run.
 
-Read the [CONCISE DOCUMENTATION](https://github.com/Fusion/kittendns/wiki)
+Read the [CONCISE DOCUMENTATION](https://github.com/Fusion/kittendns/wiki) 📖
 
-</td>
-</tr>
-</table>
+
 
 # DNS Synchronization
 
