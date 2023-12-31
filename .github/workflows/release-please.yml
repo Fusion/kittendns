@@ -1,0 +1,26 @@
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+name: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/release-please-action@v3
+        with:
+          release-type: go
+          package-name: KittenDNS
+          default-branch: master
+          pull-request-title-pattern: "ci: release ${version}"
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          extra-files: |
+            version/const.go
