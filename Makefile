@@ -1,8 +1,11 @@
 SHELL := /bin/bash
-BUILD_FLAGS=-s -w
+BUILD_FLAGS?=-s -w
 TRIM_FLAGS=
+MAIN_TARGETS?=linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+PLUGIN_TARGETS?=linux/amd64,linux/arm64,darwin/amd64,darwin/arm64
+GO_RELEASE_V=$(shell go version | { read _ _ v _; echo $${v#go}; })
 
-include plugins/Makefile
+#include plugins/Makefile
 
 build:
 	@mkdir -p bin && go build ${TRIM_FLAGS} -ldflags "${BUILD_FLAGS}" -o bin/kittendns main.go
@@ -38,5 +41,18 @@ fullrelease:
 release: linuxamd64 linuxarm64 winamd64
 
 release_darwin: darwinamd64 darwinarm64
+
+releasemain:
+	@xgo -v -ldflags="${BUILD_FLAGS}" -trimpath -go ${GO_RELEASE_V} -out kittendns -dest bin -buildvcs=false --targets="${MAIN_TARGETS}" .
+
+releaseplugin:
+	@echo "Building $P plugin $M"; \
+	xgo -v -ldflags="${BUILD_FLAGS}" -trimpath -go ${GO_RELEASE_V} -out $P -dest bin -buildvcs=false -buildmode=plugin --targets="${PLUGIN_TARGETS}" --pkg $M/$P.go . && \
+	(cd bin && for lib in $$(ls $$P-*); do sudo mv $$lib $$lib.so; done); \
+
+releaseplugins:
+	@for pkg in $$(find plugins/* -depth -maxdepth 0 -type d); do \
+		P=$$(echo $$pkg | cut -d'/' -f 2) M=$$pkg make releaseplugin; \
+	done
 
 .PHONY: build release release_darwin test linuxamd64 linuxarm64 darwinamd64 darwinarm64 winamd64 plugins plugins_darwin
