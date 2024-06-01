@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -72,15 +73,15 @@ func singleLifeCycle() error {
 	// attach request handler func
 	dns.HandleFunc(".", app.handleDnsRequest)
 
+	listenIp, listenPort := findUsableNetTuple(app.Config.Settings.Listeners)
 	// start server
-	port := int(app.Config.Settings.Listen)
-	server_u := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
-	server_t := &dns.Server{Addr: ":" + strconv.Itoa(port), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
+	server_u := &dns.Server{Addr: listenIp + ":" + strconv.Itoa(listenPort), Net: "udp", MsgAcceptFunc: moreLenientAcceptFunc}
+	server_t := &dns.Server{Addr: listenIp + ":" + strconv.Itoa(listenPort), Net: "tcp", MsgAcceptFunc: moreLenientAcceptFunc}
 	if app.Config.Secret.Signature != "" {
 		server_u.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
 		server_t.TsigSecret = map[string]string{app.Config.Secret.Key: app.Config.Secret.Signature}
 	}
-	log.Printf("Listening on port %d\n", port)
+    log.Printf("Listening (%s:%d)\n", listenIp, listenPort)
 	go server_u.ListenAndServe()
 	go server_t.ListenAndServe()
 
@@ -132,6 +133,38 @@ func singleLifeCycle() error {
 const (
 	_QR = 1 << 15 // query/response (response=1)
 )
+
+func findUsableNetTuple(listeners []string) (string, int) {
+	interfaces, _ := net.Interfaces()
+	for _, iinterface := range interfaces {
+		addresses, err := iinterface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses {
+			v4address := address.(*net.IPNet).IP.To4()
+			if v4address == nil {
+				continue
+			}
+            for _, listener := range listeners {
+                bits := strings.Split(listener, ":")
+                if v4address.String() != bits[0] {
+                    continue
+                }
+                if len(bits) == 2 {
+                    port, err := strconv.Atoi(bits[1])
+                    if err != nil {
+                        log.Printf("Ignoring listener with bad port definition ('%s')\n", bits[1])
+                        continue
+                    }
+                    return bits[0], port
+                }
+                return bits[0], 53
+            }
+		}
+	}
+	return "0.0.0.0", 53
+}
 
 func moreLenientAcceptFunc(dh dns.Header) dns.MsgAcceptAction {
 	if isResponse := dh.Bits&_QR != 0; isResponse {
@@ -250,15 +283,15 @@ func flattenRecords(cfg *config.Config) *map[uint16]map[string]config.Record {
 			// SRV Record
 			if record.Service != "" {
 				if record.Host != "" {
-					log.Println("Ignored:: Host and Service cannot be set at the same time.")
+					log.Println("Ignored:" + record.Service + ": Host and Service cannot be set at the same time.")
 					continue
 				}
 				if record.Text != "" {
-					log.Println("Ignored:: Text and Service cannot be set at the same time.")
+					log.Println("Ignored:" + record.Service + ": Text and Service cannot be set at the same time.")
 					continue
 				}
 				if record.Target != "" && record.NoService {
-					log.Println("Ignored:: Both 'no service' and an actual target defined for Service.")
+					log.Println("Ignored:" + record.Service + ": Both 'no service' and an actual target defined for Service.")
 					continue
 				}
 				// RFC2782
@@ -266,7 +299,7 @@ func flattenRecords(cfg *config.Config) *map[uint16]map[string]config.Record {
 					record.Target = "."
 				}
 				if record.Target == "" {
-					log.Println("Ignored:: No Target specified for a Service.")
+					log.Println("Ignored:" + record.Service + ": No Target specified for a Service.")
 					continue
 				}
 				record.Target = canonicalize(record.Origin, record.Target)
@@ -285,11 +318,11 @@ func flattenRecords(cfg *config.Config) *map[uint16]map[string]config.Record {
 			// TXT Record
 			if record.Text != "" {
 				if record.Host != "" {
-					log.Println("Ignored:: Host and Text cannot be set at the same time.")
+					log.Println("Ignored::" + record.Text + " Host and Text cannot be set at the same time.")
 					continue
 				}
 				if record.Target == "" {
-					log.Println("Ignored:: No Target specified for a Text record.")
+					log.Println("Ignored:" + record.Text + ": No Target specified for a Text record.")
 					continue
 				}
 				record.Type = dns.TypeTXT
@@ -301,11 +334,11 @@ func flattenRecords(cfg *config.Config) *map[uint16]map[string]config.Record {
 			// CNAME Record
 			if record.Aliased != "" {
 				if len(ipv4) > 0 || len(ipv6) > 0 {
-					log.Println("Ignored:: Aliased and IPv4/IPv6 cannot be set at the same time.")
+					log.Println("Ignored:" + record.Aliased + ": Aliased and IPv4/IPv6 cannot be set at the same time.")
 					continue
 				}
 				if record.Host == "@" {
-					log.Println("Ignored:: Origin record cannot be aliased.")
+					log.Println("Ignored:" + record.Aliased + ": Origin record cannot be aliased.")
 					continue
 				}
 				record.Aliased = canonicalize(record.Origin, record.Aliased)

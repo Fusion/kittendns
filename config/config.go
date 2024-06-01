@@ -16,7 +16,9 @@ type Parent struct {
 type Settings struct {
 	DebugLevel uint8
 	AutoReload bool
-	Listen     uint16
+	// ["ip:port", ...]
+	// Each instance should identify a working ip address from this list
+	Listeners []string
 	// If true, when multiple records are found for a domain, only one is returned
 	// A different one every time.
 	// If false, all records are returned.
